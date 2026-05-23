@@ -1,0 +1,25 @@
+version: '3.8'
+
+# PocketBase backend for Runway tracker
+# Single binary, embedded SQLite, ~15MB
+# Run with: docker compose up -d
+# Access admin UI at: http://localhost:8090/_/
+
+services:
+  pocketbase:
+    image: ghcr.io/muchobien/pocketbase:latest
+    container_name: runway-pocketbase
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./pb_data:/pb_data
+      - ./pb_migrations:/pb_migrations
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8090/api/health || exit 1
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+# Data persists in ./pb_data (SQLite + uploaded files)
+# Migrations in ./pb_migrations are auto-applied on startup

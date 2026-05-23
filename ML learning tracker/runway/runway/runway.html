@@ -1,0 +1,1659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+  <title>Runway</title>
+
+  <!--
+    ============================================================
+    RUNWAY — Brandon's MLOps Learning Tracker
+    ============================================================
+
+    DATA MODEL (for native port reference)
+    -------------------------------------
+    CURRICULUM: Array<Week>
+      Week {
+        num: Int (1-20)
+        phase: 'DevOps Fundamentals' | 'MLOps Bridge' | 'UPenn Semester'
+        title: String
+        blockA: Block (build, ~45 min daily)
+        blockB: Block (understand, ~30 min daily)
+        project: String (one shippable thing per week)
+        sd: SDTrack (system design, 2-3 sessions/week)
+      }
+      Block {
+        task: String                 // top-line action
+        brief: {                     // teaching content
+          insight: String            // the core idea, 2-4 sentences
+          why: String                // why it matters to Brandon specifically
+          terms: Array<String>       // key vocab to learn
+          resource: String           // best free resource
+          test: Array<String>        // self-test questions
+          doneWhen: String           // completion criteria
+        }
+      }
+      SDTrack: same shape as Block.brief, plus topic and source.
+
+    PROGRESS STORAGE
+    ----------------
+    Single key in localStorage: "runway:v1"
+    Value shape:
+      {
+        version: 1,
+        progress: {
+          "w{week}_d{day}_a": Boolean,    // Block A done on day
+          "w{week}_d{day}_b": Boolean,    // Block B done on day
+          "w{week}_project":  Boolean,    // Project shipped
+          "w{week}_sd":       Boolean,    // SD sessions done
+        }
+      }
+
+    NATIVE PORT NOTES
+    -----------------
+    - All UI state is recomputed from progress + current date
+    - No backend; data lives only on device
+    - For SwiftUI: TabView with 3 tabs (Now, Week, Plan)
+    - Streak rule: a day counts if either Block A OR Block B done (forgiving)
+    - START_DATE drives current week derivation; let user override in settings
+  -->
+
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Runway" />
+  <meta name="theme-color" content="#0E0D0B" />
+  <meta name="mobile-web-app-capable" content="yes" />
+
+  <link rel="apple-touch-icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><rect width='180' height='180' rx='40' fill='%230E0D0B'/><circle cx='90' cy='90' r='44' fill='none' stroke='%23E8A547' stroke-width='8'/><path d='M70 90 L86 106 L114 76' fill='none' stroke='%23E8A547' stroke-width='10' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
+  <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><rect width='180' height='180' rx='40' fill='%230E0D0B'/><circle cx='90' cy='90' r='44' fill='none' stroke='%23E8A547' stroke-width='8'/><path d='M70 90 L86 106 L114 76' fill='none' stroke='%23E8A547' stroke-width='10' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,400;1,9..144,600&family=JetBrains+Mono:wght@400;500;600&family=Inter+Tight:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; background: #0E0D0B; color: #E8E4DC; font-family: 'Inter Tight', -apple-system, system-ui, sans-serif; -webkit-font-smoothing: antialiased; overscroll-behavior: none; }
+    body { padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); background: radial-gradient(ellipse at top, #1A1815 0%, #0E0D0B 60%); min-height: 100vh; min-height: 100dvh; }
+    button { cursor: pointer; border: none; background: none; color: inherit; font-family: inherit; font-size: inherit; }
+    ::selection { background: #E8A547; color: #0E0D0B; }
+
+    .app { max-width: 480px; margin: 0 auto; padding-bottom: calc(72px + env(safe-area-inset-bottom)); min-height: 100dvh; }
+
+    .topbar { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px 12px; border-bottom: 1px solid #2A2722; }
+    .brand { font-family: 'Fraunces', serif; font-weight: 600; font-size: 22px; letter-spacing: -0.02em; color: #F2EDE3; }
+    .brand .dot { color: #E8A547; }
+    .streak { display: flex; align-items: center; gap: 6px; font-family: 'JetBrains Mono', monospace; }
+    .streak-num { font-family: 'Fraunces', serif; font-size: 28px; font-weight: 700; color: #E8A547; line-height: 1; font-variant-numeric: tabular-nums; }
+    .streak-label { font-size: 10px; color: #8A8478; letter-spacing: 0.1em; text-transform: uppercase; }
+
+    .view { padding: 20px; animation: fadeIn 0.25s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+    .kicker { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.2em; color: #8A8478; text-transform: uppercase; margin-bottom: 8px; }
+    .phase-tag { display: inline-block; font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 600; letter-spacing: 0.15em; color: #0E0D0B; padding: 4px 10px; border-radius: 2px; margin-bottom: 14px; text-transform: uppercase; }
+    .week-meta { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8A8478; letter-spacing: 0.08em; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+    .now-badge { background: #E8A547; color: #0E0D0B; padding: 2px 6px; border-radius: 2px; font-size: 9px; font-weight: 700; letter-spacing: 0.1em; }
+    .week-title { font-family: 'Fraunces', serif; font-size: 32px; font-weight: 600; color: #F2EDE3; line-height: 1.05; letter-spacing: -0.02em; margin-bottom: 24px; }
+
+    /* NOW view */
+    .now-hero { text-align: center; padding: 28px 0 12px; }
+    .now-date { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8A8478; letter-spacing: 0.2em; text-transform: uppercase; margin-bottom: 8px; }
+    .now-day { font-family: 'Fraunces', serif; font-style: italic; font-size: 44px; font-weight: 400; color: #F2EDE3; letter-spacing: -0.02em; line-height: 1; margin-bottom: 24px; }
+    .now-week-pill { display: inline-block; padding: 6px 14px; background: #16140F; border: 1px solid #2A2722; border-radius: 100px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #D4CFC2; letter-spacing: 0.1em; }
+
+    /* BIG BLOCK CARDS */
+    .big-block { width: 100%; padding: 22px 20px; background: #16140F; border: 1px solid #2A2722; border-radius: 8px; margin-bottom: 14px; text-align: left; transition: all 0.2s ease; display: block; }
+    .big-block:active { transform: scale(0.985); }
+    .big-block .row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .big-block .tag { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600; letter-spacing: 0.15em; color: #E8A547; }
+    .big-block .duration { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #8A8478; letter-spacing: 0.05em; }
+    .big-block .desc { font-size: 15px; line-height: 1.5; color: #D4CFC2; }
+    .big-block .check-circle { width: 24px; height: 24px; border: 1.5px solid #3A3530; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all 0.2s ease; }
+    .big-block.done { background: #1F1A12; border-color: #E8A547; }
+    .big-block.done .check-circle { background: #E8A547; border-color: #E8A547; color: #0E0D0B; font-weight: 700; }
+    .big-block.b-block .tag { color: #A8B59E; }
+    .big-block.b-block.done { background: #1A2017; border-color: #7A8B6F; }
+    .big-block.b-block.done .check-circle { background: #7A8B6F; border-color: #7A8B6F; color: #0E0D0B; }
+
+    /* LEARN MORE expansion */
+    .learn-toggle { display: inline-flex; align-items: center; gap: 6px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #8A8478; letter-spacing: 0.15em; text-transform: uppercase; margin-top: 14px; padding: 4px 0; cursor: pointer; }
+    .learn-toggle .arrow { transition: transform 0.2s ease; display: inline-block; }
+    .learn-toggle.open .arrow { transform: rotate(90deg); }
+    .brief { display: none; margin-top: 14px; padding-top: 14px; border-top: 1px solid #2A2722; animation: fadeIn 0.25s ease; }
+    .brief.open { display: block; }
+    .brief-section { margin-bottom: 14px; }
+    .brief-section:last-child { margin-bottom: 0; }
+    .brief-label { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 0.2em; color: #E8A547; text-transform: uppercase; margin-bottom: 6px; }
+    .brief.b-brief .brief-label { color: #A8B59E; }
+    .brief.sd-brief .brief-label { color: #8FA6B5; }
+    .brief-text { font-size: 14px; line-height: 1.55; color: #D4CFC2; }
+    .brief-why { font-size: 13px; line-height: 1.55; color: #B5AFA0; font-style: italic; padding-left: 12px; border-left: 2px solid #2A2722; }
+    .brief-terms { display: flex; flex-wrap: wrap; gap: 5px; }
+    .brief-term { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #D4CFC2; background: #0E0D0B; border: 1px solid #2A2722; padding: 3px 8px; border-radius: 100px; }
+    .brief.b-brief .brief-term { border-color: #2A3329; }
+    .brief.sd-brief .brief-term { border-color: #2A3540; color: #C5D0D9; }
+    .brief-resource { font-size: 13px; line-height: 1.5; color: #D4CFC2; padding: 10px 12px; background: #0E0D0B; border-radius: 4px; border-left: 2px solid #E8A547; }
+    .brief.b-brief .brief-resource { border-left-color: #7A8B6F; }
+    .brief.sd-brief .brief-resource { border-left-color: #8FA6B5; }
+    .brief-tests { list-style: none; padding: 0; }
+    .brief-tests li { font-size: 13px; line-height: 1.5; color: #D4CFC2; padding: 6px 0 6px 24px; position: relative; }
+    .brief-tests li::before { content: '?'; position: absolute; left: 4px; top: 6px; font-family: 'Fraunces', serif; font-size: 14px; color: #E8A547; font-weight: 600; }
+    .brief.b-brief .brief-tests li::before { color: #7A8B6F; }
+    .brief.sd-brief .brief-tests li::before { color: #8FA6B5; }
+    .brief-done { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #D4CFC2; padding: 8px 12px; background: rgba(232, 165, 71, 0.06); border-radius: 4px; border: 1px solid rgba(232, 165, 71, 0.2); }
+
+    /* DAY GRID (Week view) */
+    .day-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin: 24px 0; }
+    .day-col { background: #0E0D0B; border: 1px solid #2A2722; border-radius: 4px; padding: 10px 4px 8px; text-align: center; }
+    .day-col.today { background: #1F1A12; border-color: #E8A547; }
+    .day-label { font-family: 'JetBrains Mono', monospace; font-size: 9px; color: #8A8478; letter-spacing: 0.1em; }
+    .day-date { font-family: 'Fraunces', serif; font-size: 16px; font-weight: 600; color: #F2EDE3; margin: 2px 0 8px; font-variant-numeric: tabular-nums; }
+    .check-btn { width: 100%; padding: 5px 0; font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 600; color: #5A554A; background: transparent; border: 1px solid #2A2722; border-radius: 2px; margin-bottom: 3px; transition: all 0.15s ease; min-height: 24px; }
+    .check-btn.done-a { background: #E8A547; color: #0E0D0B; border-color: #E8A547; }
+    .check-btn.done-b { background: #7A8B6F; color: #0E0D0B; border-color: #7A8B6F; }
+
+    /* WEEK view block descriptions */
+    .block-section { padding-bottom: 18px; margin-bottom: 18px; border-bottom: 1px solid #2A2722; }
+    .block-header { display: flex; gap: 14px; align-items: baseline; margin-bottom: 8px; }
+    .block-tag { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600; letter-spacing: 0.15em; color: #E8A547; }
+    .block-tag.b { color: #A8B59E; }
+    .block-duration { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #8A8478; }
+    .block-text { font-size: 15px; line-height: 1.55; color: #D4CFC2; }
+
+    /* PROJECT */
+    .project-section { margin-top: 20px; padding-top: 20px; border-top: 1px solid #2A2722; }
+    .project-label { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.15em; color: #8A8478; margin-bottom: 10px; text-transform: uppercase; }
+    .project-btn { width: 100%; display: flex; align-items: flex-start; gap: 14px; padding: 18px; background: #0E0D0B; border: 1px dashed #3A3530; border-radius: 6px; text-align: left; font-size: 14px; color: #D4CFC2; line-height: 1.5; transition: all 0.2s ease; }
+    .project-btn:active { transform: scale(0.99); }
+    .project-btn.done { background: #1A2017; border: 1px solid #7A8B6F; border-style: solid; color: #A8B59E; }
+    .project-check { font-family: 'Fraunces', serif; font-size: 22px; font-weight: 700; color: #E8A547; line-height: 1; flex-shrink: 0; }
+    .project-btn.done .project-check { color: #7A8B6F; }
+
+    /* SYSTEM DESIGN */
+    .sd-section { margin-top: 20px; padding-top: 20px; border-top: 1px solid #2A2722; }
+    .sd-label { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.15em; color: #8FA6B5; margin-bottom: 10px; text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
+    .sd-label::before { content: '◇'; color: #8FA6B5; }
+    .sd-card { background: #0E0D0B; border: 1px solid #2A3540; border-radius: 6px; padding: 18px; }
+    .sd-card.done { background: #131A20; border-color: #8FA6B5; }
+    .sd-card-header { display: flex; align-items: flex-start; gap: 14px; cursor: pointer; }
+    .sd-check { font-family: 'Fraunces', serif; font-size: 22px; font-weight: 700; color: #8FA6B5; line-height: 1; flex-shrink: 0; padding: 2px 0; }
+    .sd-body { flex: 1; }
+    .sd-topic { font-size: 14px; color: #D4CFC2; line-height: 1.5; margin-bottom: 6px; font-weight: 500; }
+    .sd-card.done .sd-topic { color: #A8B5C0; }
+    .sd-meta { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #6B7A85; letter-spacing: 0.05em; line-height: 1.5; }
+    .sd-cadence { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #6B7A85; letter-spacing: 0.1em; margin-top: 8px; padding-top: 8px; border-top: 1px solid #1A2126; }
+    .sd-toggle-row { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding-top: 12px; border-top: 1px solid #1A2126; }
+    .sd-toggle-btn { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #8A8478; letter-spacing: 0.15em; text-transform: uppercase; padding: 6px 10px; border: 1px solid #2A2722; border-radius: 2px; }
+    .sd-toggle-btn:active { background: #1A2126; }
+    .sd-toggle-btn.active { color: #0E0D0B; background: #8FA6B5; border-color: #8FA6B5; }
+
+    /* STATS */
+    .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 20px; }
+    .stat { background: #16140F; border: 1px solid #2A2722; border-radius: 6px; padding: 14px; }
+    .stat-label { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 0.15em; color: #8A8478; margin-bottom: 6px; text-transform: uppercase; }
+    .stat-value { font-family: 'Fraunces', serif; font-size: 22px; font-weight: 600; color: #F2EDE3; font-variant-numeric: tabular-nums; margin-bottom: 8px; }
+    .stat-bar { height: 2px; background: #2A2722; border-radius: 1px; overflow: hidden; }
+    .stat-bar-fill { height: 100%; background: #E8A547; transition: width 0.4s ease; }
+
+    /* PLAN view */
+    .milestone-row { padding: 12px 4px 6px; display: flex; flex-direction: column; gap: 2px; }
+    .milestone-label { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #E8A547; letter-spacing: 0.2em; font-weight: 600; }
+    .milestone-desc { font-size: 11px; color: #8A8478; font-style: italic; padding-left: 14px; }
+    .timeline-row { width: 100%; display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: 10px; padding: 12px 8px; border-radius: 4px; text-align: left; transition: all 0.15s ease; margin-bottom: 2px; }
+    .timeline-row:active { background: #1F1A12; }
+    .timeline-row.current { background: rgba(232, 165, 71, 0.06); }
+    .timeline-row.past { opacity: 0.55; }
+    .timeline-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .timeline-num { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8A8478; font-weight: 500; font-variant-numeric: tabular-nums; }
+    .timeline-title { font-size: 13px; color: #D4CFC2; }
+    .timeline-pct { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #8A8478; font-variant-numeric: tabular-nums; }
+
+    /* TABBAR */
+    .tabbar { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(14, 13, 11, 0.92); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-top: 1px solid #2A2722; padding: 8px 0 calc(8px + env(safe-area-inset-bottom)); display: flex; justify-content: space-around; z-index: 100; }
+    .tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px; color: #5A554A; transition: color 0.15s ease; }
+    .tab.active { color: #E8A547; }
+    .tab-icon { font-family: 'Fraunces', serif; font-size: 18px; font-weight: 600; line-height: 1; }
+    .tab-label { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase; }
+
+    .footer-actions { padding: 24px 20px; display: flex; justify-content: space-between; gap: 12px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #5A554A; }
+    .text-btn { padding: 6px 10px; border: 1px solid #2A2722; border-radius: 2px; letter-spacing: 0.1em; text-transform: lowercase; }
+    .text-btn:active { background: #1F1A12; }
+
+    .footnote { padding: 0 20px 12px; font-size: 12px; color: #8A8478; font-style: italic; line-height: 1.5; }
+    .empty { text-align: center; padding: 40px 20px; color: #8A8478; }
+
+    /* SETTINGS MODAL */
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); z-index: 200; display: flex; align-items: flex-end; justify-content: center; animation: fadeIn 0.2s ease; }
+    .modal { background: #16140F; border: 1px solid #2A2722; border-radius: 12px 12px 0 0; width: 100%; max-width: 480px; padding: 24px 20px calc(24px + env(safe-area-inset-bottom)); max-height: 85vh; overflow-y: auto; animation: slideUp 0.25s ease; }
+    @keyframes slideUp { from { transform: translateY(40px); } to { transform: translateY(0); } }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    .modal-title { font-family: 'Fraunces', serif; font-size: 22px; font-weight: 600; color: #F2EDE3; }
+    .modal-close { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #8A8478; padding: 4px 10px; border: 1px solid #2A2722; border-radius: 2px; }
+    .form-row { margin-bottom: 16px; }
+    .form-label { display: block; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.15em; color: #8A8478; text-transform: uppercase; margin-bottom: 6px; }
+    .form-input { width: 100%; background: #0E0D0B; border: 1px solid #2A2722; border-radius: 4px; padding: 10px 12px; color: #E8E4DC; font-family: 'JetBrains Mono', monospace; font-size: 13px; outline: none; }
+    .form-input:focus { border-color: #E8A547; }
+    .form-hint { font-size: 11px; color: #8A8478; margin-top: 4px; font-style: italic; line-height: 1.4; }
+    .toggle-row { display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-top: 1px solid #2A2722; }
+    .toggle-row:first-child { border-top: none; }
+    .toggle-label { font-size: 14px; color: #D4CFC2; }
+    .toggle-switch { width: 42px; height: 24px; background: #2A2722; border-radius: 12px; position: relative; cursor: pointer; transition: background 0.2s ease; }
+    .toggle-switch.on { background: #7A8B6F; }
+    .toggle-knob { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; background: #F2EDE3; border-radius: 50%; transition: transform 0.2s ease; }
+    .toggle-switch.on .toggle-knob { transform: translateX(18px); }
+    .btn-primary { width: 100%; background: #E8A547; color: #0E0D0B; padding: 12px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; margin-top: 12px; }
+    .btn-primary:active { background: #D4943C; }
+    .btn-primary:disabled { opacity: 0.5; }
+    .sync-msg { font-family: 'JetBrains Mono', monospace; font-size: 11px; padding: 10px; border-radius: 4px; margin-top: 12px; }
+    .sync-msg.ok { background: rgba(122, 139, 111, 0.1); color: #A8B59E; border: 1px solid rgba(122, 139, 111, 0.3); }
+    .sync-msg.err { background: rgba(212, 119, 92, 0.1); color: #D4775C; border: 1px solid rgba(212, 119, 92, 0.3); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="topbar">
+      <div class="brand">runway<span class="dot">.</span></div>
+      <div style="display:flex; align-items:center; gap: 14px;">
+        <div id="syncIndicator" class="sync-indicator" data-action="open-settings" style="display:flex; align-items:center; gap:5px; font-family:'JetBrains Mono', monospace; font-size:10px; letter-spacing:0.1em; text-transform:uppercase; cursor:pointer; padding:4px 8px; border-radius:2px;"></div>
+        <div class="streak">
+          <span class="streak-num" id="streakNum">0</span>
+          <span class="streak-label">day<span id="streakPlural">s</span></span>
+        </div>
+      </div>
+    </div>
+    <div id="view" class="view"></div>
+    <nav class="tabbar">
+      <button class="tab" data-tab="now"><span class="tab-icon">●</span><span class="tab-label">Now</span></button>
+      <button class="tab" data-tab="week"><span class="tab-icon">▤</span><span class="tab-label">Week</span></button>
+      <button class="tab" data-tab="plan"><span class="tab-icon">≡</span><span class="tab-label">Plan</span></button>
+    </nav>
+  </div>
+  <div id="modalContainer"></div>
+
+  <script>
+    // ============================================================
+    // CURRICULUM — Source of truth for all teaching content
+    // 20 weeks. Each week has blockA, blockB (with brief), project,
+    // and sd (with brief). Briefs are designed to actually teach,
+    // not just list topics.
+    // ============================================================
+    const CURRICULUM = [
+      {
+        num: 1, phase: 'DevOps Fundamentals', title: 'Linux & Bash',
+        blockA: {
+          task: 'Write a Bash script daily — process monitor, log parser, service health checker',
+          brief: {
+            insight: 'Bash literacy comes from writing, not reading. You will not learn it from a book. You will learn it from the third time you debug why your loop ate a variable name.',
+            why: 'Every alert you get in DevSecOps starts with "is the service running?" If you can answer that with a 20-line script in five minutes, you save an hour of guessing.',
+            terms: ['set -euo pipefail', 'parameter expansion ${var:-default}', 'command substitution $(...)', 'exit codes', '[[ ]] vs [ ]', 'heredocs', 'trap'],
+            resource: 'Greg\'s Wiki (mywiki.wooledge.org/BashGuide). ShellCheck.net — paste your script, get gotchas highlighted.',
+            test: ['What does `set -euo pipefail` actually do, line by line?', 'Why is `[ $x = "y" ]` dangerous and what fixes it?', 'How do you make sure your script exits cleanly if killed mid-run?'],
+            doneWhen: 'Three working scripts, each under 50 lines, each with error handling. Pass ShellCheck.'
+          }
+        },
+        blockB: {
+          task: 'Man pages, stdin/stdout/stderr flow, systemd unit files',
+          brief: {
+            insight: 'In Linux everything is a file, including I/O streams. stdin/stdout/stderr are file descriptors 0/1/2. Redirect them with > < | and you can pipe anything to anything. systemd is just init replaced with a smarter manager that watches for crashes and restarts you.',
+            why: 'Ninety percent of "why is my service down" answers involve one of: stuck process, full disk, broken pipe, or systemd unit misconfiguration. This is the literacy that turns guessing into debugging.',
+            terms: ['file descriptor (FD)', 'redirection (> < >> 2>&1 &>)', 'pipes (|)', 'exit codes ($?)', 'signals (SIGTERM, SIGKILL, SIGHUP)', 'systemd unit file', 'journalctl', 'systemctl status'],
+            resource: 'man bash (REDIRECTION section). man 7 signal. man systemd.service. Julia Evans\' zines on bite-sized Linux.',
+            test: ['What\'s the difference between `2>&1` and `&>`?', 'Why is `kill -9` considered "rude"?', 'How do you make a systemd service auto-restart on failure?']
+          }
+        },
+        project: 'Service health checker script that emails on failure',
+        sd: {
+          topic: 'Networking Fundamentals — IP, TCP/UDP, HTTP/HTTPS, OSI model',
+          source: 'NeetCode SD Course · Grokking SD Fundamentals',
+          brief: {
+            insight: 'Every system you build sends bytes over a network, and most system design questions touch the OSI model whether they say it or not. Mental model: data gets wrapped in layers (HTTP → TCP → IP → Ethernet) on send, unwrapped on receive. Each layer adds a header.',
+            why: 'Your nginx work in Block A this week is L7 (HTTP). Your tcpdump work next week is L4 (TCP). Knowing which layer you are at when something breaks is half of debugging.',
+            terms: ['OSI 7 layers', 'TCP vs UDP', 'HTTP/1.1 vs HTTP/2 vs HTTP/3 (QUIC)', '3-way handshake (SYN/SYN-ACK/ACK)', 'MSS / MTU', 'Idempotent vs safe methods', 'Stateful vs stateless'],
+            resource: 'NeetCode SD Course — "Networking Essentials" video. Grokking SD Fundamentals "Network Protocols" section.',
+            test: ['Why does TCP need three handshake steps, not two?', 'If you ping google.com and get a response, what layers were touched in order?', 'When would you choose UDP over TCP?']
+          }
+        }
+      },
+      {
+        num: 2, phase: 'DevOps Fundamentals', title: 'Linux Deep Dive',
+        blockA: {
+          task: 'Build a small CLI tool in Bash with proper error handling',
+          brief: {
+            insight: 'A good CLI tool feels obvious to use and impossible to misuse. Flags have help text. Errors are clear. Exit codes are honest. Bash can do all of this with getopts and a little discipline.',
+            why: 'The "small tools" you write at SAIC become other people\'s muscle memory. A polished one earns trust. A janky one gets replaced.',
+            terms: ['getopts', 'long flags (--verbose)', 'heredocs for help text', 'trap signal handlers', 'idempotent operations', 'POSIX vs Bash-isms'],
+            resource: 'man getopts. "Bash Cookbook" by Albing & Vossen — old but timeless.',
+            test: ['Why is getopts safer than parsing $1, $2 manually?', 'How does trap let you clean up on Ctrl+C?', 'What exit code conventions do well-behaved CLIs follow?'],
+            doneWhen: 'One CLI tool with --help, --verbose, --dry-run, returns proper exit codes (0 success, 1+ error categories).'
+          }
+        },
+        blockB: {
+          task: 'Process lifecycle, signals, file descriptors — diagram the crash flow',
+          brief: {
+            insight: 'A process is born via fork(), customized via exec(), runs until it exits or receives an uncaught signal. Parent must wait() on children or you get zombies. Signals are async interrupts — handle them or they kill you.',
+            why: 'Every container, every daemon, every CI runner is a process tree. Understanding the lifecycle is understanding why things hang, leak, or won\'t die. This is the foundation under containerization.',
+            terms: ['fork / exec / wait', 'PID / PPID', 'zombie process', 'orphan process', 'SIGTERM vs SIGKILL', 'SIGCHLD', 'file descriptor leak', 'init (PID 1)'],
+            resource: 'man 2 fork. man 2 execve. man 7 signal. Julia Evans "How processes work" zines.',
+            test: ['Why can\'t you catch SIGKILL?', 'What creates a zombie process?', 'What\'s an FD leak and how do you find one?']
+          }
+        },
+        project: 'Diagram + 90-second explanation of "what happens when a Linux process crashes"',
+        sd: {
+          topic: 'DNS & CDNs — resolution chain, edge caching, CDN strategies',
+          source: 'Grokking SD Fundamentals · NeetCode networking video',
+          brief: {
+            insight: 'DNS is hierarchical lookup with caching layers (browser → OS → resolver → root → TLD → authoritative). CDNs are geographic caching at the edge so users hit servers near them. Both reduce latency from seconds to milliseconds.',
+            why: 'Your nginx is the origin server. A CDN sits in front of it. Knowing where caching happens (and where it does not) is how you debug "why is staging fast and prod slow."',
+            terms: ['A vs CNAME vs AAAA records', 'TTL', 'DNS resolver', 'Anycast routing', 'Edge POPs (Points of Presence)', 'Cache-Control headers', 'ETag', 'Stale-while-revalidate', 'Push vs pull CDN'],
+            resource: 'NeetCode "DNS" + "CDN" videos. Grokking SD Fundamentals "DNS" section. Cloudflare Learning Center — excellent free explainers.',
+            test: ['Trace a request from a user in Tokyo loading cnn.com.', 'Why is TTL low for some records and high for others?', 'What\'s the difference between a push CDN and a pull CDN?']
+          }
+        }
+      },
+      {
+        num: 3, phase: 'DevOps Fundamentals', title: 'Networking I',
+        blockA: {
+          task: 'Set up local nginx reverse proxy with two upstream servers',
+          brief: {
+            insight: 'A reverse proxy is the front door of every modern web stack. nginx is good at it because its config is declarative — you describe the topology, not the algorithm.',
+            why: 'Every K8s Ingress, every CDN edge, every API gateway is ultimately doing what nginx does. Master the config and the abstractions become readable.',
+            terms: ['upstream blocks', 'proxy_pass', 'X-Forwarded-For / X-Forwarded-Proto', 'request/response flow', 'keepalive', 'proxy_buffering'],
+            resource: 'nginx.com beginner\'s guide. DigitalOcean tutorials on nginx reverse proxy.',
+            test: ['Why does nginx need X-Forwarded-For when proxying?', 'What does keepalive between nginx and upstream actually save?', 'When does proxy_buffering hurt you?'],
+            doneWhen: 'curl through the LB hits backend1 and backend2 alternately. Headers show which backend served the request.'
+          }
+        },
+        blockB: {
+          task: 'TCP handshake, DNS resolution, HTTP lifecycle — draw it',
+          brief: {
+            insight: 'Drawing the full HTTP lifecycle from address bar to byte-on-wire forces you to confront what you actually know. Do it. Redo it. Make it a 90-second story you can tell on a whiteboard.',
+            why: 'Interviewers literally ask "what happens when you type a URL." If you can\'t draw it, you can\'t claim to know how the web works.',
+            terms: ['DNS resolution chain', 'TCP 3-way handshake', 'TLS handshake', 'HTTP request', 'server processing', 'response flow', 'TCP teardown', 'connection reuse'],
+            resource: 'GitHub repo "what-happens-when" — comprehensive walk-through. "High Performance Browser Networking" by Ilya Grigorik (free online).',
+            test: ['Where does the TLS handshake happen in the timeline?', 'What does HTTP/2 keep-alive save you over HTTP/1.1?', 'Why are subsequent requests to the same host faster?']
+          }
+        },
+        project: 'Draw full HTTP request lifecycle from browser to server in under 2 min',
+        sd: {
+          topic: 'Load Balancers — L4 vs L7, round robin, least connections, IP hash',
+          source: 'Grokking SD Fundamentals · NeetCode LB video',
+          brief: {
+            insight: 'A load balancer is a traffic cop between users and servers. L4 (TCP) is fast but dumb — routes connections only. L7 (HTTP) is smart but slower — can route by URL, header, cookie. Modern systems use both: L4 for raw throughput, L7 for app-aware routing.',
+            why: 'Your nginx reverse proxy IS an L7 load balancer. Algorithms determine fairness vs stickiness. Hash for session affinity, least connections for variable request sizes.',
+            terms: ['L4 vs L7', 'Round robin', 'Least connections', 'Weighted round robin', 'IP hash', 'Sticky sessions', 'Health checks (active vs passive)', 'GSLB (global server load balancing)', 'Connection draining'],
+            resource: 'NeetCode "Load Balancing" video. Grokking SD Fundamentals "Load Balancer." HAProxy and nginx docs.',
+            test: ['When would you pick IP hash over round robin?', 'Why does your load balancer need health checks?', 'What does "draining" mean during a deploy?']
+          }
+        }
+      },
+      {
+        num: 4, phase: 'DevOps Fundamentals', title: 'Networking II',
+        blockA: {
+          task: 'tcpdump or Wireshark capture on your reverse proxy',
+          brief: {
+            insight: 'tcpdump and Wireshark show you what actually happened on the wire — not what your app thinks happened. When the docs say one thing and the behavior says another, the pcap is the tiebreaker.',
+            why: 'Once you can read a pcap, you stop being scared of network bugs. "Is the request even reaching the server?" becomes a 30-second answer instead of a half-day debugging marathon.',
+            terms: ['pcap format', 'BPF filter syntax', 'tcpdump host/port/proto', 'Wireshark display filters', 'TLS handshake messages', 'TCP retransmissions', 'window scaling'],
+            resource: 'tcpdump.org examples. Wireshark\'s built-in capture filters reference. Julia Evans "tcpdump" zine.',
+            test: ['Filter for only TLS ClientHello messages — what command?', 'How do you tell a TCP retransmission from a duplicate?', 'What does "window scaling" mean and why does it matter?'],
+            doneWhen: 'Annotated pcap or Wireshark trace showing SYN → SYN-ACK → ACK → ClientHello → ServerHello with each step explained.'
+          }
+        },
+        blockB: {
+          task: 'TLS termination, load balancing strategies, subnetting basics',
+          brief: {
+            insight: 'TLS is not "add an s to http." It is an asymmetric handshake that establishes a symmetric session key, then encrypts everything after. Termination is where TLS unwraps — usually your LB, not your app.',
+            why: 'TLS termination location is a constant source of bugs: HTTP between LB and app, certificate mismatches, SNI failures. Knowing where the encryption boundary is fixes all of these.',
+            terms: ['TLS handshake', 'ClientHello / ServerHello', 'cipher suites', 'SNI (Server Name Indication)', 'certificate chain', 'TLS termination', 'mutual TLS (mTLS)', 'perfect forward secrecy (PFS)'],
+            resource: 'Cloudflare Learning Center on TLS. "Bulletproof SSL and TLS" by Ivan Ristic (free Ch 1-3 online).',
+            test: ['Why does TLS need both asymmetric AND symmetric crypto?', 'What is SNI and why is it needed?', 'When would you use mTLS instead of regular TLS?']
+          }
+        },
+        project: 'Annotated tcpdump trace of a TLS handshake',
+        sd: {
+          topic: 'Databases I — SQL vs NoSQL, ACID, BASE, when to use each',
+          source: 'NeetCode SD course · Grokking DB sections',
+          brief: {
+            insight: 'SQL gives you strict schema, joins, and ACID transactions. NoSQL gives you flexible schema, horizontal scaling, and BASE (eventually consistent). The honest truth: most apps need SQL for the transactional core plus NoSQL for specific use cases (cache, search, time-series).',
+            why: 'Interviewers love "which database?" Wrong answer: "MongoDB because it scales." Right answer: "Postgres for users and transactions, Redis for cache, maybe ClickHouse for analytics."',
+            terms: ['ACID (Atomicity, Consistency, Isolation, Durability)', 'BASE', 'Transactions', 'Joins', 'B-tree vs hash vs inverted index', 'Document / key-value / columnar / graph DBs', 'Normalized vs denormalized', 'Read replicas'],
+            resource: 'NeetCode "SQL vs NoSQL" + "Database Indexes" videos. Grokking SD Fundamentals "Database" sections. Kleppmann\'s "Designing Data-Intensive Applications" Ch. 2-3 for depth.',
+            test: ['When does denormalization win?', 'Why are joins expensive at scale?', 'Name 3 use cases where Redis beats Postgres.']
+          }
+        }
+      },
+      {
+        num: 5, phase: 'DevOps Fundamentals', title: 'Docker Internals',
+        blockA: {
+          task: 'Multi-stage Dockerfile, rootless container, Trivy scan',
+          brief: {
+            insight: 'A good production Dockerfile separates the toolchain from the runtime. Build stage has gcc, npm, the universe. Final stage has the binary and nothing else. Smaller image = faster pull = lower attack surface.',
+            why: 'Your DevSecOps work cares about both speed and security. Multi-stage builds + scanning + rootless gives you all three at once.',
+            terms: ['FROM ... AS stage', 'COPY --from=stage', 'USER directive', '.dockerignore', 'layer caching', 'distroless base images', 'CVE scanning'],
+            resource: 'Docker official "best practices" docs. Trivy GitHub README. Snyk\'s Dockerfile security cheat sheet.',
+            test: ['Why is order of COPY/RUN in a Dockerfile crucial for cache?', 'Why is running as root in a container risky if "containers are isolated"?', 'Distroless vs Alpine vs Ubuntu — when does each win?'],
+            doneWhen: 'Image under 100MB for a small app. Runs as non-root. Trivy scan passes with zero HIGH or CRITICAL CVEs.'
+          }
+        },
+        blockB: {
+          task: 'Namespaces, cgroups, image layers, container escape conceptually',
+          brief: {
+            insight: 'Containers are not VMs. They are processes with restricted views. Linux namespaces (PID, NET, MNT, UTS, IPC, USER) give you isolation. cgroups give you resource limits. Same kernel, different views.',
+            why: 'When you can explain THIS, you can explain why containers start fast (no boot), why escapes are possible (shared kernel), and why "Docker is lightweight" actually means something specific.',
+            terms: ['Namespaces (PID, NET, MNT, UTS, IPC, USER)', 'cgroups', 'OCI runtime (runc)', 'Image layers (OverlayFS)', 'entrypoint vs cmd', 'PID 1 problem', 'Capabilities (CAP_NET_ADMIN, etc.)'],
+            resource: 'Julia Evans "Containers are just processes" zine. Liz Rice "Building a Container from Scratch in Go" talk on YouTube — gold standard.',
+            test: ['Name 3 of the 6 Linux namespaces.', 'Why does `kill` in a container only kill processes in that container?', 'What is the PID 1 problem and how do tools like tini solve it?']
+          }
+        },
+        project: 'Minimal hardened container with passing Trivy scan',
+        sd: {
+          topic: 'Caching — Redis vs Memcached, cache-aside, write-through, eviction',
+          source: 'Grokking SD Fundamentals · NeetCode caching video',
+          brief: {
+            insight: 'Caching trades memory for latency. Read cache (Redis in front of DB) is the standard play. Write strategies (cache-aside, write-through, write-behind) decide what happens when data changes. Eviction policies (LRU, LFU, TTL) decide what gets dropped.',
+            why: 'Your Docker work this week mirrors caching mental model: image layers cache to skip rebuilds. Same idea everywhere — cache the expensive thing, invalidate when it changes.',
+            terms: ['Cache-aside (lazy loading)', 'Write-through', 'Write-behind / write-back', 'TTL', 'LRU / LFU / FIFO eviction', 'Cache stampede', 'Cache penetration', 'Hot keys', 'Distributed caching'],
+            resource: 'NeetCode "Caching" video. Grokking SD Fundamentals "Caching." Redis docs patterns guide is free and excellent.',
+            test: ['What is a cache stampede and how do you prevent it?', 'When does write-through beat cache-aside?', 'Why is "cache invalidation" one of the two hard problems in CS?']
+          }
+        }
+      },
+      {
+        num: 6, phase: 'DevOps Fundamentals', title: 'CI/CD Patterns',
+        blockA: {
+          task: 'GitHub Actions: lint → test → build → deploy + manual gate + rollback',
+          brief: {
+            insight: 'A real pipeline isn\'t "run tests then deploy." It\'s a directed graph of jobs with gates between them. Linting before tests saves CI minutes. Approval gates before prod save your weekend. Rollback as a first-class job saves your year.',
+            why: 'Your Azure DevOps work translates directly. GitHub Actions has different YAML but the same patterns — and recruiters at FAANG-adjacent companies almost all use GitHub Actions.',
+            terms: ['workflow events (push, pull_request, workflow_dispatch)', 'jobs vs steps', 'environments + approval', 'matrix builds', 'caching (actions/cache)', 'OIDC for cloud auth (no static keys)', 'reusable workflows'],
+            resource: 'GitHub Actions official "learn" docs. "GitHub Actions in Action" book (Manning) for depth.',
+            test: ['Why use OIDC instead of stored AWS keys in Actions?', 'When should you use a matrix vs separate jobs?', 'What does "environments" buy you that "if" conditions don\'t?'],
+            doneWhen: 'Push triggers full pipeline. Manual approval needed for deploy. Rollback workflow can be triggered manually with a one-button.'
+          }
+        },
+        blockB: {
+          task: 'GitOps vs push CI/CD, trunk-based dev, blue/green, canary',
+          brief: {
+            insight: 'GitOps inverts the CI/CD arrow. Instead of CI pushing to prod, prod pulls from Git. Your repo IS your deployment state. Drift detection becomes possible because deviation from Git equals drift.',
+            why: 'ArgoCD and Flux are not "another CI tool." They are a fundamentally different model. Knowing both lets you choose the right one. This is platform engineering thinking.',
+            terms: ['Push vs pull CI/CD', 'Declarative config', 'Drift detection', 'ArgoCD', 'Flux', 'Blue/green deployment', 'Canary deployment', 'Feature flags', 'Progressive delivery'],
+            resource: 'Weaveworks "GitOps Guide" PDF (free). OpenGitOps principles. NeetCode SD deployment strategies.',
+            test: ['When does GitOps fail or feel wrong?', 'Why is rollback easy in GitOps?', 'What\'s the difference between blue/green and canary, and when does each win?']
+          }
+        },
+        project: 'Working pipeline with rollback in a public repo',
+        sd: {
+          topic: 'Message Queues — Kafka, RabbitMQ, pub/sub vs queue, backpressure',
+          source: 'NeetCode SD course · Grokking messaging',
+          brief: {
+            insight: 'A message queue decouples producers from consumers. Producer drops a message, queue holds it, consumer picks it up when ready. This turns synchronous failure points into asynchronous resilience.',
+            why: 'Your CI/CD work this week is conceptually a queue — jobs queue up, runners pick them up. Same pattern as Kafka topics or RabbitMQ queues. Same trade-offs.',
+            terms: ['Pub/sub vs point-to-point', 'Topics', 'Partitions (Kafka)', 'Consumer groups', 'At-least-once / at-most-once / exactly-once', 'Backpressure', 'Dead letter queue (DLQ)', 'Idempotent consumers'],
+            resource: 'NeetCode "Message Queue" video. Grokking SD Fundamentals "Messaging." Kafka\'s own intro docs are surprisingly readable.',
+            test: ['Why is exactly-once delivery essentially impossible?', 'When does Kafka beat RabbitMQ?', 'What is a DLQ and why do you need one?']
+          }
+        }
+      },
+      {
+        num: 7, phase: 'DevOps Fundamentals', title: 'Kubernetes I',
+        blockA: {
+          task: 'Multi-service deploy with Ingress, HPA, PDB, resource limits',
+          brief: {
+            insight: 'Production K8s is not "kubectl apply deployment.yaml." It is resource requests so the scheduler can pack you, limits so noisy neighbors can\'t crush you, HPA so you scale, and PDB so deploys don\'t kill your last replica.',
+            why: 'Your on-prem K8s work at SAIC plus these primitives equals a portfolio piece. Knowing the production checklist separates "deployed K8s" from "ran K8s in production."',
+            terms: ['Deployment vs StatefulSet vs DaemonSet', 'Service types (ClusterIP, NodePort, LoadBalancer)', 'Ingress', 'HPA (Horizontal Pod Autoscaler)', 'PDB (Pod Disruption Budget)', 'requests vs limits', 'namespaces', 'resource quotas'],
+            resource: 'Kubernetes.io concepts docs (the official ones are actually great). "Kubernetes the Hard Way" by Kelsey Hightower (free GitHub).',
+            test: ['Why are requests for scheduling and limits for runtime?', 'When does a StatefulSet beat a Deployment?', 'What\'s the difference between HPA and VPA?'],
+            doneWhen: 'App is reachable via Ingress, scales when load-tested, survives a `kubectl drain` of one node.'
+          }
+        },
+        blockB: {
+          task: 'Scheduler internals, etcd role, control plane flow',
+          brief: {
+            insight: 'kubectl apply doesn\'t create a pod. It writes to etcd. The controller manager notices, makes a Deployment. The scheduler notices unscheduled pods, picks a node. The kubelet on that node actually runs the container. This async chain is why "stuck in Pending" has 5 possible causes.',
+            why: 'Every K8s debugging story is "where did the chain break?" Knowing the chain means knowing where to look. Without it, you restart things randomly.',
+            terms: ['Control plane (etcd, API server, scheduler, controller manager)', 'kubelet', 'kube-proxy', 'reconciliation loop', 'desired vs actual state', 'CRDs (Custom Resource Definitions)', 'operators'],
+            resource: '"Kubernetes the Hard Way" (Kelsey Hightower, free on GitHub). NeetCode K8s overview videos.',
+            test: ['What 4 components are involved between kubectl apply and a running pod?', 'Why is K8s called "declarative"?', 'What does the kubelet do that the scheduler doesn\'t?']
+          }
+        },
+        project: 'Annotated diagram of pod lifecycle from kubectl apply to running',
+        sd: {
+          topic: 'Databases II — Sharding, replication, master-slave, partitioning',
+          source: 'Grokking SD Fundamentals · NeetCode sharding video',
+          brief: {
+            insight: 'Replication is copies for redundancy and read scaling. Sharding is splits for write scaling. Most large systems do both. Replication is well-understood (master-replica). Sharding is hard because it touches your application code — you must know which shard to hit.',
+            why: 'Extends your K8s mental model. Pods are like replicas, namespaces are like shards. Same trade-offs: availability vs consistency, ease vs scale.',
+            terms: ['Read replica', 'Master-replica vs multi-master', 'Sync vs async replication', 'Hash / range / geographic sharding', 'Consistent hashing', 'Hot spots', 'Rebalancing', 'Cross-shard queries'],
+            resource: 'NeetCode "Sharding" + "Database Replication" videos. Grokking SD Fundamentals "Sharding" + "Replication."',
+            test: ['Why is geographic sharding good for GDPR?', 'What is a "hot shard" and how do you avoid one?', 'Why is consistent hashing better than mod-N hashing?']
+          }
+        }
+      },
+      {
+        num: 8, phase: 'DevOps Fundamentals', title: 'Kubernetes II',
+        blockA: {
+          task: 'Break your cluster deliberately and debug it',
+          brief: {
+            insight: 'You learn K8s debugging by breaking things on purpose, predicting the failure mode, then watching reality match (or not match) your prediction. The gap between prediction and reality is your knowledge gap.',
+            why: 'Production K8s issues are inherently chaotic. Practicing on intentional failures means real failures become familiar instead of terrifying.',
+            terms: ['kubectl describe pod', 'kubectl logs --previous', 'CrashLoopBackOff', 'ImagePullBackOff', 'OOMKilled', 'Pending (events!)', 'kubectl events --sort-by', 'kubectl debug ephemeral container'],
+            resource: '"Learn Kubernetes the hard way" approach. K8s docs "Troubleshooting" section.',
+            test: ['Pod is Pending — what 5 things check first?', 'Pod is CrashLoopBackOff — where do you look?', 'OOMKilled — too low limit, memory leak, or both? How can you tell?'],
+            doneWhen: 'Incident response writeup of 3 self-inflicted outages with root cause + fix.'
+          }
+        },
+        blockB: {
+          task: 'CNI, Services, Ingress controllers, NetworkPolicies',
+          brief: {
+            insight: 'K8s networking is 5 layers: pod-to-pod (CNI), pod-to-service (kube-proxy/IPVS), service-to-pod (Endpoints), external-to-service (LoadBalancer/Ingress), and the underlying node network. NetworkPolicies are firewall rules at the pod level.',
+            why: 'When you can map the actual packet path, you can debug "why can\'t service A reach service B" instead of restarting random things. This is platform engineer literacy.',
+            terms: ['CNI (Container Network Interface)', 'pod CIDR', 'ClusterIP / NodePort / LoadBalancer', 'Endpoints / EndpointSlices', 'Ingress vs Gateway API', 'NetworkPolicy', 'kube-proxy modes (iptables, IPVS, eBPF)', 'Service Mesh (Istio, Linkerd)'],
+            resource: 'Calico\'s "Kubernetes networking 101" series. learnk8s.io networking deep dive.',
+            test: ['Trace a packet from pod A in node 1 to pod B in node 2.', 'What does an Ingress controller actually do?', 'When would you reach for a NetworkPolicy?']
+          }
+        },
+        project: 'Incident response writeup of a self-inflicted K8s outage',
+        sd: {
+          topic: 'CAP Theorem & Consistency — strong vs eventual, PACELC',
+          source: 'NeetCode SD course · Grokking consistency patterns',
+          brief: {
+            insight: 'CAP says you can pick 2 of 3: Consistency, Availability, Partition tolerance. In practice partitions WILL happen, so you really choose CP or AP. Strong consistency = correctness over uptime. Eventual = uptime over instant correctness.',
+            why: 'Your K8s work uses both. etcd is CP (loses availability during partition, data stays correct). Pod IPs across nodes are AP (eventual consistency). Knowing what your tools chose matters when debugging.',
+            terms: ['Strong consistency', 'Eventual consistency', 'Linearizability', 'Causal consistency', 'Read-your-writes', 'PACELC', 'Paxos', 'Raft', 'Quorum reads/writes', 'Vector clocks'],
+            resource: 'NeetCode "CAP Theorem" video. Grokking SD Fundamentals "Consistency Patterns." Martin Kleppmann talks on consistency.',
+            test: ['A bank\'s balance system — CP or AP?', 'A social media like counter — CP or AP?', 'What does PACELC add that CAP missed?']
+          }
+        }
+      },
+      {
+        num: 9, phase: 'MLOps Bridge', title: 'ML Fundamentals',
+        blockA: {
+          task: 'fast.ai Lesson 1 — get a model running, no theory rabbit holes',
+          brief: {
+            insight: 'Don\'t try to understand everything. Just get the training loop running and watch the numbers change. Theory clicks faster when you have a running thing to point at.',
+            why: 'Your engineering brain wants to understand the whole stack before touching anything. Fight that instinct here. Get something running, then learn why.',
+            terms: ['Dataset', 'DataLoader', 'Model', 'Loss function', 'Optimizer', 'Train/val split', 'Epoch'],
+            resource: 'fast.ai Lesson 1 video + Ch 1 of the free book at fast.ai. 3blue1brown\'s "But what IS a neural network" YouTube series.',
+            test: ['What does the optimizer actually update?', 'Why do we split into train and val sets?', 'What does one epoch consist of?'],
+            doneWhen: 'A trained classifier with accuracy printed to console, weights saved to disk.'
+          }
+        },
+        blockB: {
+          task: 'What is a training loop, what does it produce, why track it',
+          brief: {
+            insight: 'A training loop is just: forward pass (predict), compute loss (how wrong), backward pass (compute gradients), step optimizer (update weights). Repeat for batches. Track metrics. That\'s it. The rest is decoration.',
+            why: 'When ML demystifies into "a loop that minimizes a function," you stop being intimidated by it. The infra around it (data versioning, experiment tracking, model serving) is then just normal SWE problems applied to ML.',
+            terms: ['Forward pass', 'Backward pass', 'Gradient descent', 'Loss function', 'Optimizer (SGD, Adam)', 'Epoch vs batch vs step', 'Train/val/test split', 'Overfitting', 'Regularization (dropout, L2)'],
+            resource: 'fast.ai book Ch 1-2. 3blue1brown "But what IS a neural network" 4-part YouTube series.',
+            test: ['What\'s the difference between an epoch and a step?', 'Why do we split into train/val/test, not just train/val?', 'What does the optimizer actually do mathematically?']
+          }
+        },
+        project: 'One working classifier you understand end-to-end',
+        sd: {
+          topic: 'Design URL Shortener — base62, key generation, redirect strategy',
+          source: 'Grokking SD Interview · NeetCode TinyURL walkthrough',
+          brief: {
+            insight: 'Classic gateway problem. Tests your fundamentals: how do you generate short keys (base62 encode an auto-incrementing ID), how do you scale reads (Redis cache + read replicas), how do you handle collisions (don\'t if sequential, retry if hashing).',
+            why: 'First "design X" problem in most interviews. Master the framework here and you can apply it to any "design X" problem.',
+            terms: ['Base62 encoding', 'Key generation strategies (counter, hash, MD5+truncate)', '301 vs 302 redirect', 'Analytics counting', 'Custom slugs', 'Link expiry', 'Rate limiting', 'Read-heavy vs write-heavy'],
+            resource: 'NeetCode "TinyURL" walkthrough on YouTube. Grokking SD Interview "Designing a URL Shortener" — the canonical writeup.',
+            test: ['For 100M URLs, what\'s the shortest key length you need?', 'Why 302 over 301 if you want analytics?', 'How do you prevent abuse and spam URLs?']
+          }
+        }
+      },
+      {
+        num: 10, phase: 'MLOps Bridge', title: 'scikit-learn + MLFlow',
+        blockA: {
+          task: 'Train 3 models, log every run to MLFlow',
+          brief: {
+            insight: 'sklearn is your training framework, MLFlow is your experiment tracker. Two libraries, two roles. Don\'t conflate them. Train with sklearn, log with MLFlow.',
+            why: 'Three models, side by side, with all params and metrics logged — that\'s what a real ML team\'s workflow looks like. You\'re building muscle memory for that.',
+            terms: ['sklearn Pipeline', 'mlflow.start_run()', 'mlflow.log_params / log_metrics / log_artifact', 'Model registry', 'mlflow.sklearn.log_model'],
+            resource: 'MLFlow official quickstart. sklearn user guide on pipelines.',
+            test: ['Why log params and metrics separately?', 'What goes in an "artifact" that\'s not a metric?', 'When does the model registry add value over just logging models as artifacts?'],
+            doneWhen: 'MLFlow UI shows 3 runs side-by-side with their accuracy and the model files downloadable.'
+          }
+        },
+        blockB: {
+          task: 'Map MLFlow concepts to DevOps: registry=artifact store, run=build',
+          brief: {
+            insight: 'MLFlow concepts map 1:1 to DevOps. Experiment = repo. Run = build. Params = build args. Artifacts = build outputs. Model registry = container registry. Once you see this mapping, MLFlow stops being mysterious.',
+            why: 'The MLOps world has invented new names for old patterns. Translating to your existing DevOps vocab cuts the learning curve in half.',
+            terms: ['Experiment', 'Run', 'Param', 'Metric', 'Artifact', 'Model registry', 'Model version', 'Model stage (None, Staging, Production)', 'Tracking server vs registry'],
+            resource: 'MLFlow\'s own concepts docs. The Made-With-ML GitHub repo by goku-mohandas.',
+            test: ['Where does MLFlow store metrics — DB or files?', 'What\'s the difference between an experiment and a run?', 'How do you promote a model from Staging to Production?']
+          }
+        },
+        project: 'MLFlow UI comparing 3+ runs with different hyperparameters',
+        sd: {
+          topic: 'Design Pastebin — storage-heavy variant, expiration, analytics',
+          source: 'Grokking SD Interview · NeetCode storage problems',
+          brief: {
+            insight: 'URL shortener but with actual content. Adds object storage (S3) for the paste body, metadata in DB. Big content goes to blob storage, small metadata to relational DB. This separation pattern is everywhere.',
+            why: 'Shows how to separate hot data (metadata, queried often) from cold data (content, accessed once). A pattern you\'ll use in MLOps for model artifacts, in DevOps for build outputs, everywhere.',
+            terms: ['Object storage (S3)', 'CDN for static content', 'Pre-signed URLs', 'Expiration job (cron)', 'Syntax highlighting (server vs client)', 'Soft delete', 'Paste size limits'],
+            resource: 'Grokking SD Interview "Pastebin" chapter. NeetCode storage problems playlist.',
+            test: ['Why store paste content in S3 not your DB?', 'How do expired pastes actually expire?', 'How do you handle 1KB pastes vs 10MB pastes differently?']
+          }
+        }
+      },
+      {
+        num: 11, phase: 'MLOps Bridge', title: 'DVC',
+        blockA: {
+          task: 'Add DVC to mlops-lab repo, version data in S3',
+          brief: {
+            insight: 'DVC is Git for big files plus a pipeline runner. The "git for data" part stores tiny pointer files in Git, actual data in S3. The pipeline part (dvc.yaml) makes your training reproducible.',
+            why: 'A reproducible ML repo is a portfolio piece. Without DVC: "trust me, it works on my machine." With DVC: anyone clones, pulls, repros.',
+            terms: ['dvc init', 'dvc add', '.dvc files', 'dvc remote', 'dvc.yaml', 'dvc repro', 'dvc.lock', 'dvc params'],
+            resource: 'DVC\'s own "Get Started" tutorial (genuinely good). Made-With-ML repo\'s DVC sections.',
+            test: ['Why store the .dvc pointer in Git but not the data itself?', 'What does dvc.lock track?', 'When would you use dvc params vs dvc dataset versioning?'],
+            doneWhen: 'Repo is reproducible by another machine via clone + dvc pull + dvc repro.'
+          }
+        },
+        blockB: {
+          task: 'Why versioning data matters, DVC vs Git mental model',
+          brief: {
+            insight: 'Git is bad at large binaries because it stores diffs of everything in history forever. DVC stores tiny pointer files in Git, actual data in object storage. Same UX (commit, push, pull), but the right tool for the data.',
+            why: 'Versioning data is half of reproducible ML. The other half is versioning code. DVC bridges them so your Git workflow extends to datasets.',
+            terms: ['DVC pointer file (.dvc)', 'DVC remote (S3, GCS, Azure)', 'Content-addressable storage (CAS)', 'MD5 chunking', 'dvc.yaml stages', 'dvc.lock', 'params.yaml'],
+            resource: 'DVC concepts docs. iterative.ai blog posts on data versioning theory.',
+            test: ['What problem does CAS solve that simple file naming doesn\'t?', 'Why is "rerunning" reproducible only if dvc.lock exists?', 'When would you NOT use DVC?']
+          }
+        },
+        project: 'Working dvc repro pipeline with versioned dataset',
+        sd: {
+          topic: 'Design Twitter / Instagram — feed generation, fanout strategies',
+          source: 'Grokking SD Interview · NeetCode Twitter walkthrough',
+          brief: {
+            insight: 'The feed problem. Two strategies: fanout-on-write (pre-compute feeds when user posts) vs fanout-on-read (compute on request). Real systems are hybrid: fanout-on-write for normal users, fanout-on-read for celebrities (you don\'t want to write to 100M followers when Beyoncé posts).',
+            why: 'Reveals the fundamental trade-off in distributed systems: precompute (memory cost, fast reads) vs lazy compute (cheap memory, slow reads). Applies far beyond social feeds.',
+            terms: ['Fanout on write vs read', 'News feed', 'Timeline service', 'Fanout queue', 'Denormalization for reads', 'Cold start problem', 'Celebrity problem', 'Feed pagination'],
+            resource: 'NeetCode "Twitter" walkthrough. Grokking SD Interview "Designing Twitter."',
+            test: ['Why is fanout-on-write terrible for Justin Bieber?', 'When does fanout-on-read make sense?', 'Where would you cache vs compute?']
+          }
+        }
+      },
+      {
+        num: 12, phase: 'MLOps Bridge', title: 'Cloud-Native ML',
+        blockA: {
+          task: 'Run one managed training job on SageMaker or Azure ML',
+          brief: {
+            insight: 'Don\'t try to learn both clouds. Pick one. Run one training job. Deploy one endpoint. curl it. Done. Everything else is variation on this theme.',
+            why: 'Managed ML services are increasingly the default for production ML. Knowing one cloud\'s flow makes you fluent in the concepts even if you switch providers.',
+            terms: ['Training job', 'Model artifact', 'Endpoint', 'Inference container', 'Instance type / family', 'Spot training (cheaper)'],
+            resource: 'AWS SageMaker workshops (free, hands-on at sagemaker-workshop.com). Azure ML "MLOps with GitHub" tutorial.',
+            test: ['How does SageMaker know which Python script to run?', 'Why use a separate inference container vs the training one?', 'When would Spot instances backfire?'],
+            doneWhen: '`curl https://your-endpoint` with a JSON payload returns a prediction.'
+          }
+        },
+        blockB: {
+          task: 'Cost vs control: managed ML vs self-hosted K8s',
+          brief: {
+            insight: 'Managed ML services are "K8s for ML, abstracted." You get speed-to-prototype but lose control of the box. For experiments: managed wins. For high-volume serving with custom logic: self-hosted often wins. Most companies do both.',
+            why: 'The cost/control trade-off is the same as any cloud-vs-self-hosted decision. Knowing when each makes sense is platform engineering work.',
+            terms: ['Managed training', 'Managed endpoint', 'Instance type / family', 'Autoscaling endpoints', 'Batch inference vs real-time', 'Multi-model endpoints', 'A/B traffic split', 'Serverless inference'],
+            resource: 'AWS Well-Architected ML Lens. Azure ML pricing calculator (gives you the cost intuitions).',
+            test: ['When does SageMaker get expensive?', 'Batch vs real-time inference cost-wise?', 'When would you NOT use a managed service?']
+          }
+        },
+        project: 'Deployed model endpoint with curl-able predictions',
+        sd: {
+          topic: 'Design YouTube / Netflix — video storage, encoding, CDN',
+          source: 'Grokking SD Interview · NeetCode YouTube walkthrough',
+          brief: {
+            insight: 'Video is BIG. The problem is bytes, not requests. Storage hierarchy: hot videos on CDN/edge, warm on regional, cold in deep archive. Encoding: transcode every video into 5-10 bitrates so clients can adaptive-stream (HLS/DASH).',
+            why: 'Shows how to handle large objects, geographic distribution, and processing pipelines — patterns that apply to file storage, ML model serving (models can be GB), and beyond.',
+            terms: ['Video encoding (H.264, H.265, AV1)', 'Adaptive bitrate streaming', 'HLS / DASH', 'Video segments', 'GOP (Group of Pictures)', 'CDN tiering', 'Popular content prediction', 'View counting at scale'],
+            resource: 'NeetCode "YouTube" walkthrough. Grokking SD Interview "Designing YouTube."',
+            test: ['Why transcode into 5+ bitrates?', 'How does a CDN decide what to cache?', 'Why is the view count "approximate" on most platforms?']
+          }
+        }
+      },
+      {
+        num: 13, phase: 'MLOps Bridge', title: 'Buffer & Polish',
+        blockA: {
+          task: 'Catch up on skipped work. Polish your mlops-lab README',
+          brief: {
+            insight: 'A polished portfolio piece beats five unpolished ones. Spend this week making your mlops-lab repo something a stranger could clone and understand.',
+            why: 'This is the difference between "I learned MLOps" (forgettable) and "I shipped an MLOps system, here\'s the repo" (memorable). Recruiters see repos, not topic checklists.',
+            terms: ['README structure', 'Architecture diagram (mermaid, excalidraw)', 'Quickstart section', 'Dependency pinning (requirements.txt, poetry.lock)', '.gitignore hygiene', 'License'],
+            resource: 'Browse top-starred MLOps repos on GitHub for README patterns. Made-With-ML\'s README is a good template.',
+            test: ['Does your README explain WHY, not just WHAT?', 'Can you reproduce your project from a fresh clone?', 'Is there a diagram?'],
+            doneWhen: 'A stranger could clone your repo and reproduce your work from the README alone.'
+          }
+        },
+        blockB: {
+          task: 'Write a 1-page summary of what you built',
+          brief: {
+            insight: 'Writing about what you built is when you discover what you didn\'t understand. The "I\'ll explain this later" parts you skipped become visible the moment you try to put them in writing.',
+            why: 'The skill of writing about your own work clearly is what separates engineers from senior engineers in interviews and on the job. Practice it on something you actually understand.',
+            terms: ['Technical writing', 'Narrative arc (problem → approach → result)', 'Audience awareness (recruiter vs engineer)', 'Show don\'t tell (link to commits, screenshots, demos)'],
+            resource: 'Stripe engineering blog. Netflix tech blog. These are the gold standard for engineering writing.',
+            test: ['Could a non-technical recruiter understand the impact?', 'Could a senior engineer evaluate your skill from this?', 'Have you removed every adjective that doesn\'t earn its place?']
+          }
+        },
+        project: 'Public mlops-lab repo with clean README — portfolio piece',
+        sd: {
+          topic: 'Design Uber / Lyft — geo-indexing (quadtrees, geohash), real-time matching',
+          source: 'Grokking SD Interview · NeetCode Uber walkthrough',
+          brief: {
+            insight: 'Geo-spatial problem. Riders and drivers move; you need to match nearby ones in real-time. Naive: query DB for "drivers within X km" — fails at scale. Real: index space with quadtrees or geohash so lookups are O(log n).',
+            why: 'Geo-indexing is the same pattern as DB indexing, just multi-dimensional. Useful for any "find nearby X" problem — including the K8s scheduler picking the right node.',
+            terms: ['Quadtree', 'Geohash', 'S2 cells (Google)', 'Driver-rider matching', 'WebSockets for real-time updates', 'Surge pricing logic', 'ETA calculation', 'Geofencing'],
+            resource: 'NeetCode "Uber" walkthrough. Grokking SD Interview "Designing Uber."',
+            test: ['Why quadtree over a normal index?', 'Why use websockets here vs polling?', 'How would you handle surge pricing without a single global hot spot?']
+          }
+        }
+      },
+      {
+        num: 14, phase: 'UPenn Semester', title: 'UPenn Starts',
+        blockA: {
+          task: '[Reduced] UPenn coursework is primary. 30 min/day max on MLOps',
+          brief: {
+            insight: 'Your job this week is to NOT collapse. Set up grad school workflow. Calendar blocks for school, work, MLOps. Pick a note-taking system and commit to it.',
+            why: 'First-week grad students who try to perfectly balance everything burn out by week 6. The ones who underschedule on purpose, then add back what fits, thrive.',
+            terms: ['Time-blocking', 'Knowledge management (Obsidian, Notion, etc.)', 'Spaced repetition (Anki) for terminology', 'Strategic reading (skim first)', 'Office hours'],
+            resource: 'Cal Newport "How to Become a Straight-A Student" (yes, undergrad-targeted but techniques transfer). Andy Matuschak\'s notes on spaced repetition.',
+            test: ['Have you blocked time for school, work, AND MLOps?', 'Do you have at least one classmate you can DM?', 'Do you know who your TA is?'],
+            doneWhen: 'A weekly calendar template that\'s sustainable. At least one reading done and one problem set started without burning out.'
+          }
+        },
+        blockB: {
+          task: 'Set up grad school workflow — notes, calendar blocks',
+          brief: {
+            insight: 'Grad school is not undergrad with harder homework. The pace is faster, the abstraction higher, the support thinner. Adapt fast: skim before reading, identify the 20% that\'s actually tested, build a study group week 1.',
+            why: 'You\'re paying a lot for this degree. Treating it strategically isn\'t cynical, it\'s respectful of your own time and money.',
+            terms: ['Skimming-first reading', 'Strategic reading (intro + conclusion + skim middle)', 'Study groups', 'Office hours', 'Problem-set-driven learning'],
+            resource: 'Cal Newport "Deep Work" + "How to Become a Straight-A Student." Your UPenn TAs (they want you to ask).',
+            test: ['Have you identified the 20% of material that\'s actually tested?', 'Have you joined or started a study group?', 'Do you have a sustainable weekly rhythm?']
+          }
+        },
+        project: 'Sustainable weekly schedule for school + work + MLOps',
+        sd: {
+          topic: '[Reduced] Design WhatsApp — websockets, message delivery guarantees',
+          source: 'Grokking SD Interview · 1 session this week is fine',
+          brief: {
+            insight: 'Real-time messaging needs persistent connections (websockets), not request/response. Message delivery has 3 guarantees: at-least-once (duplicate possible), at-most-once (loss possible), exactly-once (very hard, usually achieved with idempotent consumers).',
+            why: 'First system where "stateless servers" breaks down — websockets need server stickiness. Important shift to understand.',
+            terms: ['WebSocket', 'Long polling', 'Message broker', 'Online presence', 'Last-seen', 'Delivery receipts', 'End-to-end encryption (E2EE)', 'Group message fanout'],
+            resource: 'Grokking SD Interview "Designing Messenger/WhatsApp."',
+            test: ['Why are websockets stateful?', 'How do you scale a chat server when each user holds an open connection?', 'Why is E2EE hard in groups?']
+          }
+        }
+      },
+      {
+        num: 15, phase: 'UPenn Semester', title: 'KubeFlow (Light)',
+        blockA: {
+          task: 'One small KubeFlow pipeline — two steps, local cluster',
+          brief: {
+            insight: 'KubeFlow takes the patterns you already know from K8s (Deployments, Jobs, persistent volumes) and wraps them in ML-specific abstractions. It\'s not magic, it\'s K8s with opinions about how ML workloads should look.',
+            why: 'Your existing K8s knowledge gives you a head start most ML folks don\'t have. The "new" in KubeFlow is mostly naming and conventions.',
+            terms: ['KubeFlow Pipelines (KFP)', 'Pipeline DSL', 'Component', 'Artifact', 'Parameter', 'Tekton/Argo (underlying executor)', 'Katib (hyperparameter tuning)'],
+            resource: 'KubeFlow official tutorials. Arrikto blog has good beginner pieces.',
+            test: ['What does KFP add over plain K8s Jobs?', 'When would you use Katib vs manual hyperparameter sweeps?', 'Why is artifact passing between steps important?'],
+            doneWhen: 'One pipeline runs end-to-end. You can see the graph in the KFP UI.'
+          }
+        },
+        blockB: {
+          task: 'How K8s patterns translate to ML pipelines',
+          brief: {
+            insight: 'K8s gives you scheduling, isolation, resource limits, and observability. KubeFlow says "ML workflows need these things too" and adds artifact lineage on top. Same primitives, ML-shaped use case.',
+            why: 'If you can explain to a hiring manager "KubeFlow is K8s with ML-specific lineage and DSL," you sound senior. If you can\'t, you sound like you\'ve only read blog posts.',
+            terms: ['Pipeline as a DAG of containers', 'Component (reusable building block)', 'Artifact lineage', 'Parameter passing', 'Conditional execution', 'Loops in pipelines'],
+            resource: 'KubeFlow concepts page. Read the architecture docs.',
+            test: ['Why is "pipeline as code" valuable over "pipeline as YAML"?', 'How does artifact lineage help debugging?', 'When would you NOT use KubeFlow?']
+          }
+        },
+        project: 'Working 2-step KubeFlow pipeline in mlops-lab',
+        sd: {
+          topic: 'Design Dropbox / Google Drive — file sync, chunking, delta sync',
+          source: 'Grokking SD Interview · NeetCode Dropbox walkthrough',
+          brief: {
+            insight: 'File sync problem. Naive solution uploads full file every change — wasteful for 1GB files. Real solution: chunk file (4MB blocks), hash each chunk, only upload changed chunks (delta sync). Plus conflict resolution for concurrent edits.',
+            why: 'Chunking + delta sync is the same pattern as Git, Docker layers, and rsync. Master it once and you see it everywhere.',
+            terms: ['File chunking', 'Content-addressable storage (CAS)', 'Merkle trees', 'Delta sync', 'Conflict resolution (vector clocks)', 'Sync metadata', 'Presence / online status'],
+            resource: 'NeetCode "Dropbox" walkthrough. Grokking SD Interview "Designing Dropbox."',
+            test: ['Why hash chunks not the whole file?', 'What happens when two devices edit offline?', 'Why do you need a sync server, not just P2P?']
+          }
+        }
+      },
+      {
+        num: 16, phase: 'UPenn Semester', title: 'Spark Mental Model',
+        blockA: {
+          task: 'One 3-hour Spark intro — DataFrames only',
+          brief: {
+            insight: 'Read a CSV with PySpark, do 3 transformations (filter, groupBy, agg), write to parquet. That\'s it. No clusters, no tuning, just the API and the lazy-evaluation mental model.',
+            why: 'Spark is overkill for most problems. Knowing when it\'s overkill (vs pandas) is more valuable than memorizing the API.',
+            terms: ['SparkSession', 'DataFrame', 'Transformations vs actions', 'Lazy evaluation', '.show()', '.explain()', 'Parquet'],
+            resource: 'Spark\'s own DataFrame quickstart. Holden Karau "Spark: The Definitive Guide" first few chapters.',
+            test: ['What triggers actual computation in Spark?', 'Why does Spark output Parquet by default?', 'When does PySpark beat pure pandas?'],
+            doneWhen: 'A notebook that processes a real dataset in under 10 lines of Spark code.'
+          }
+        },
+        blockB: {
+          task: 'When you actually need Spark vs pandas',
+          brief: {
+            insight: 'Spark equals lazy distributed pandas. You describe operations on a DataFrame, nothing runs until you trigger an action (.collect, .show, .write). The DAG of transformations gets optimized as a whole. This is why .explain() matters — it shows what Spark actually plans to do.',
+            why: 'The honest answer to "when do you need Spark?" is: rarely if your data fits in memory, often if it doesn\'t. The mental model lets you have that conversation in interviews and on the job.',
+            terms: ['SparkSession', 'DataFrame', 'RDD (older)', 'Transformation vs action', 'Lazy evaluation', 'Catalyst optimizer', 'Partition', 'Shuffle', 'Broadcast join'],
+            resource: 'Spark UI walkthrough on databricks.com. "Spark: The Definitive Guide" (free PDF online).',
+            test: ['When is Spark overkill?', 'What\'s the difference between a transformation and an action?', 'Why is .collect() dangerous on big data?']
+          }
+        },
+        project: 'One Spark notebook processing a real dataset',
+        sd: {
+          topic: 'Design Web Crawler — distributed crawling, politeness, dedup',
+          source: 'Grokking SD Interview · NeetCode crawler walkthrough',
+          brief: {
+            insight: 'Crawler equals distributed BFS over the web graph. Hard problems: politeness (don\'t hammer one site), dedup (don\'t crawl the same URL twice), prioritization (crawl high-quality pages first), freshness (recrawl old pages).',
+            why: 'Same pattern as any distributed worker pool — queue + workers + dedup. Useful for any "process millions of items" problem including data pipelines.',
+            terms: ['Frontier (URL queue)', 'Politeness policy', 'robots.txt', 'URL canonicalization', 'Content dedup (shingling, SimHash)', 'Priority queue', 'Freshness scoring', 'Distributed coordination'],
+            resource: 'NeetCode "Web Crawler" walkthrough. Grokking SD Interview "Designing a Web Crawler."',
+            test: ['Why is URL dedup hard with redirects?', 'How do you prevent crawl traps (infinite calendars, etc.)?', 'How do you prioritize URLs to crawl?']
+          }
+        }
+      },
+      {
+        num: 17, phase: 'UPenn Semester', title: 'ML Monitoring',
+        blockA: {
+          task: 'Add Evidently for data drift',
+          brief: {
+            insight: 'Plug Evidently (open source) into a model in your mlops-lab. Have it compute drift on synthetic "new" data. Export the report to JSON, ingest into Grafana.',
+            why: 'You already know Prometheus and Grafana. Adding ML-specific metrics to that stack is a way smaller jump than learning a whole new monitoring tool.',
+            terms: ['Data drift', 'Concept drift', 'Monitoring metrics (PSI, KS statistic)', 'Evidently reports', 'Grafana dashboards from JSON', 'Alerting rules'],
+            resource: 'Evidently AI\'s docs and blog. They literally wrote the book on this.',
+            test: ['Why JSON intermediate instead of pushing metrics directly?', 'What threshold would you alert on for PSI?', 'When does drift detection give false positives?'],
+            doneWhen: 'Grafana shows a drift score over time that changes when you inject distribution-shifted data.'
+          }
+        },
+        blockB: {
+          task: 'Why model drift differs from infra monitoring',
+          brief: {
+            insight: 'Infra monitoring catches things that are broken. ML monitoring catches things that are wrong. A model can have 100% uptime, perfect latency, and be silently making worse predictions because the world changed. That\'s drift.',
+            why: 'This is the unique value of MLOps over DevOps. If you can explain WHY model monitoring is different, you\'ve earned your "MLOps engineer" title.',
+            terms: ['Data drift', 'Concept drift', 'Label drift', 'Prediction drift', 'PSI (Population Stability Index)', 'KS statistic', 'Ground truth lag', 'Shadow deployment'],
+            resource: 'Evidently\'s blog (deep on drift theory). "Reliable Machine Learning" book by Cathy Chen et al.',
+            test: ['Why is ground truth always delayed?', 'Difference between data drift and concept drift?', 'When would you NOT need drift monitoring?']
+          }
+        },
+        project: 'Grafana dashboard with a drift metric over time',
+        sd: {
+          topic: 'Design Facebook News Feed — ranking, push vs pull, edge ranking',
+          source: 'Grokking SD Interview · NeetCode feed problems',
+          brief: {
+            insight: 'Twitter problem but with ranking. Not "show all posts chronologically" — "show the BEST posts." Adds ML ranking (EdgeRank et al), which means you need a feature store, training pipeline, and online inference. This is where DevOps and MLOps converge.',
+            why: 'Bridges system design and ML system design. Shows where MLOps work fits in a real product. Exactly the profile FAANG-adjacent platform engineers have.',
+            terms: ['Feed ranking', 'EdgeRank', 'Push vs pull vs hybrid model', 'Feature store', 'Online inference', 'A/B testing infrastructure', 'Engagement metrics'],
+            resource: 'Grokking SD Interview "Facebook Newsfeed." Look at how real companies (Meta, Twitter) blogged about this — Eng blogs are gold.',
+            test: ['Why is ranking quality more important than latency for feeds?', 'How do you A/B test a new ranker without blowing up production?', 'Where does model serving fit in the feed path?']
+          }
+        }
+      },
+      {
+        num: 18, phase: 'UPenn Semester', title: 'CML in CI/CD',
+        blockA: {
+          task: 'GitHub Actions workflow that trains + posts metrics to PR',
+          brief: {
+            insight: 'Add CML (Continuous Machine Learning by Iterative) to a GitHub Actions workflow. On every PR: train model, evaluate, post metrics as a PR comment with plots. Suddenly every PR answers "did this make the model better?"',
+            why: 'This is the demo that wins interviews. Recruiters can SEE your work — they open a PR, see auto-generated metrics, instantly understand you do real MLOps.',
+            terms: ['CML GitHub Action', '${{ secrets.GITHUB_TOKEN }}', 'cml comment create', 'Vega plots', 'Badge generation', 'Self-hosted runners (for GPU)'],
+            resource: 'iterative.ai\'s CML docs and example repos.',
+            test: ['Why use GITHUB_TOKEN vs a PAT?', 'How do you handle non-deterministic training in CI?', 'What\'s the cost model of training on every PR?'],
+            doneWhen: 'A PR you opened has an auto-generated comment with model metrics and a plot.'
+          }
+        },
+        blockB: {
+          task: 'Why ML deserves first-class CI/CD treatment',
+          brief: {
+            insight: 'Treating models like code means every PR can answer "did this make the model better?" That\'s a deployment gate. It\'s what separates "we have a model in prod" from "we have a continuously-improving model in prod."',
+            why: 'The promise of MLOps is fast, safe iteration. CML is one concrete way to deliver that promise. It\'s also a visible portfolio piece — recruiters can see your PR comments directly.',
+            terms: ['Continuous training', 'Continuous evaluation', 'Model gating', 'Golden dataset', 'Shadow evaluation', 'Regression tests for ML'],
+            resource: 'Made-With-ML\'s CI/CD chapter. iterative.ai blog posts on MLOps maturity.',
+            test: ['What metric would you regression-test on every PR?', 'How do you handle the fact that training is non-deterministic?', 'When does CML get expensive enough to matter?']
+          }
+        },
+        project: 'PR with auto-generated model performance comment',
+        sd: {
+          topic: 'ML SD — Recommendation System (ties to your MLOps work)',
+          source: 'Grokking ML SD Interview · Alex Xu ML SD book',
+          brief: {
+            insight: 'Two-stage architecture is the industry standard. Stage 1: candidate generation (recall) — narrow billions to hundreds via embeddings/ANN. Stage 2: ranking (precision) — score the hundreds with a heavy model. Plus a re-rank for business rules.',
+            why: 'Direct application to your MLOps work. This is the system you\'d build if your model in mlops-lab needed to scale to millions of users.',
+            terms: ['Candidate generation', 'Ranking model', 'Embeddings', 'Approximate nearest neighbor (ANN)', 'HNSW / FAISS / ScaNN', 'Two-tower model', 'Feature store', 'Online vs offline training'],
+            resource: 'Grokking ML SD Interview "Recommendation System." Alex Xu "Machine Learning System Design Interview" Vol 1 — YouTube recs chapter.',
+            test: ['Why two stages, not one?', 'What\'s a two-tower model and why is it used here?', 'How does the feature store decouple training from serving?']
+          }
+        }
+      },
+      {
+        num: 19, phase: 'UPenn Semester', title: 'Explainable AI',
+        blockA: {
+          task: 'Add SHAP to your model, generate summary plots',
+          brief: {
+            insight: 'SHAP tells you which features drove each prediction. Summary plot = global view (which features matter overall). Force plot = local view (why this specific prediction).',
+            why: 'When your model is wrong, SHAP often tells you which feature betrayed you. It\'s a debugging superpower more than a regulatory checkbox.',
+            terms: ['SHAP values', 'Summary plot', 'Force plot', 'LIME (alternative)', 'Feature importance vs feature attribution', 'TreeExplainer (fast for tree models)'],
+            resource: 'SHAP\'s official docs (slundberg/shap on GitHub). Christoph Molnar\'s "Interpretable ML" book (free online).',
+            test: ['Why are SHAP values "fair" mathematically (Shapley value origin)?', 'When does global feature importance mislead you?', 'How do you embed a SHAP plot in a PR comment?'],
+            doneWhen: 'A PR comment shows both model performance AND a SHAP plot explaining which features drove predictions.'
+          }
+        },
+        blockB: {
+          task: 'When explainability is required vs nice-to-have',
+          brief: {
+            insight: 'Explainability isn\'t optional in regulated domains (finance, healthcare, hiring, defense). Even where it\'s optional, it\'s a debugging superpower. SHAP, LIME, integrated gradients are the three big techniques worth knowing.',
+            why: '"Explainable AI" is a buzzword. Knowing the actual techniques is the substance behind it. Especially relevant for defense work — DoD increasingly requires it.',
+            terms: ['SHAP (Shapley values)', 'LIME', 'Integrated gradients', 'Feature importance (global) vs attribution (local)', 'Counterfactual explanations', 'Model cards'],
+            resource: 'Christoph Molnar "Interpretable Machine Learning" (free online book). Google\'s Model Cards paper.',
+            test: ['When is global feature importance misleading?', 'Why are SHAP values mathematically "fair"?', 'What\'s a model card and what goes in it?']
+          }
+        },
+        project: 'PR comment with SHAP plot via CML',
+        sd: {
+          topic: 'ML SD — Search Ranking: embeddings, retrieval, two-tower models',
+          source: 'Grokking ML SD Interview · Alex Xu ML SD book',
+          brief: {
+            insight: 'Search is recommendation with a query. Same two-stage pattern: retrieve candidates with sparse (BM25) + dense (embedding) search, then rerank with a heavy learning-to-rank model. Modern systems blend both.',
+            why: 'Builds on Week 18. Useful for any "find relevant items" problem including code search, doc search, and RAG systems (which are everywhere now).',
+            terms: ['BM25', 'TF-IDF', 'Dense retrieval', 'Sparse retrieval', 'Hybrid search', 'Learning to rank', 'Pointwise / pairwise / listwise loss', 'Click models', 'Position bias'],
+            resource: 'Grokking ML SD Interview "Search Ranking." Alex Xu ML SD Vol 1 search chapter.',
+            test: ['When does BM25 beat embedding search?', 'Why does click-through training data have position bias?', 'What\'s a "cold start" item in search?']
+          }
+        }
+      },
+      {
+        num: 20, phase: 'UPenn Semester', title: 'Capstone Polish',
+        blockA: {
+          task: 'Tie mlops-lab into one story: data → model → serve → monitor → explain',
+          brief: {
+            insight: 'Your mlops-lab repo should tell ONE story end-to-end: dataset → versioning → training → registry → serving → monitoring → explainability. README walks a stranger through it.',
+            why: 'Time to compound. This week\'s work is the difference between "I studied MLOps" (forgettable) and "I shipped an MLOps system, here\'s the proof" (memorable).',
+            terms: ['Narrative architecture', 'End-to-end demo', 'Video walkthrough (Loom)', 'Deployable demo', 'GitHub Pages for project sites'],
+            resource: 'Look at how Stripe, Airbnb, Netflix engineering blogs structure project writeups. That\'s the bar.',
+            test: ['Can you demo the full pipeline in 5 minutes?', 'Does a 2-minute video walkthrough exist?', 'Is the LinkedIn post drafted?'],
+            doneWhen: 'You can demo the full pipeline in 5 minutes. LinkedIn post published with link.'
+          }
+        },
+        blockB: {
+          task: 'Write portfolio narrative + LinkedIn post',
+          brief: {
+            insight: 'The portfolio piece you ship in week 20 IS your value proposition to platform engineering hiring managers. It says: "I understand DevOps, MLOps, and how they connect." That\'s the rare profile.',
+            why: 'Three-year career capital compounds from here. The portfolio + UPenn + clearance + DevSecOps + MLOps combo is rare enough to command $250K+ offers in 2027-2028.',
+            terms: ['Hiring signal', 'Recruiter-friendly summary', 'Public demo', 'Storytelling for engineers', 'LinkedIn as a portfolio'],
+            resource: 'Stripe engineering blog. Airbnb tech blog. Read 5 posts, notice the structure, copy it.',
+            test: ['Can a non-technical recruiter understand what you built?', 'Can a senior engineer evaluate your skill from the repo?', 'Have you posted it?']
+          }
+        },
+        project: 'Portfolio-ready mlops-lab + LinkedIn writeup published',
+        sd: {
+          topic: 'Mock interview week — 3 problems under 45-min timer',
+          source: 'Self-directed · use the RESHADED or PEDALS framework',
+          brief: {
+            insight: 'Practice is the gap closer. Take 3 problems you\'ve done, do them under timer with no notes. Verbalize your reasoning. Time yourself: 5 min clarification, 10 min high-level, 20 min deep-dive, 10 min trade-offs/scaling.',
+            why: 'SD interviews aren\'t about knowing the answer, they\'re about thinking out loud through trade-offs. The skill is talking through it, not memorizing diagrams.',
+            terms: ['RESHADED (Requirements, Estimation, System Interface, High-level Design, Data Model, Detailed Design, Bottlenecks)', 'PEDALS framework', 'Back-of-envelope estimation', 'Capacity planning', 'Trade-off discussion'],
+            resource: 'NeetCode mock SD interview videos. Pramp / exercism for peer mocks. Grokking\'s worked examples.',
+            test: ['Did you clarify requirements before designing?', 'Did you estimate scale (QPS, storage)?', 'Did you identify the bottleneck and discuss trade-offs?']
+          }
+        }
+      }
+    ];
+
+    // ============================================================
+    // CONFIG
+    // ============================================================
+    const START_DATE = new Date('2026-05-21T00:00:00');
+    const STORAGE_KEY = 'runway:v1';
+    const PHASE_COLORS = {
+      'DevOps Fundamentals': '#E8A547',
+      'MLOps Bridge': '#D4775C',
+      'UPenn Semester': '#7A8B6F',
+    };
+    const MILESTONES = {
+      1: { label: 'START', desc: 'May 21, 2026' },
+      9: { label: 'ML BRIDGE', desc: 'Foundation → MLOps' },
+      14: { label: 'UPENN', desc: 'Grad school begins' },
+      20: { label: 'CAPSTONE', desc: 'Portfolio-ready' },
+    };
+
+    // ============================================================
+    // STATE
+    // ============================================================
+    let state = {
+      progress: {},
+      activeTab: 'now',
+      selectedWeek: 1,
+      expandedBriefs: new Set(), // ephemeral UI state, not persisted
+      showSettings: false,
+      syncStatus: 'offline', // 'offline' | 'connecting' | 'synced' | 'syncing' | 'error'
+    };
+    let syncConfig = { url: '', email: '', password: '', enabled: false };
+    let pbCtx = { token: null, userId: null, recordId: null };
+    let pushTimer = null;
+
+    function load() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          state.progress = parsed.progress || {};
+        }
+      } catch (e) { console.error('load failed', e); }
+      state.selectedWeek = getCurrentWeek();
+    }
+    function save() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+          version: 1,
+          progress: state.progress,
+          savedAt: new Date().toISOString(),
+        }));
+      } catch (e) { console.error('save failed', e); }
+    }
+
+    // ============================================================
+    // SYNC (PocketBase)
+    // Single-record-per-user pattern: the entire progress blob lives in
+    // one record. Simple, no merge logic. Last-write-wins.
+    // For Brandon's use case (1 user, 2 devices, rarely concurrent edits)
+    // this is plenty. If you upgrade to a team product, split into
+    // per-key records and add merge logic.
+    // ============================================================
+    const SYNC_CONFIG_KEY = 'runway:sync-config';
+
+    function loadSyncConfig() {
+      try {
+        const raw = localStorage.getItem(SYNC_CONFIG_KEY);
+        if (raw) syncConfig = { ...syncConfig, ...JSON.parse(raw) };
+      } catch (e) { console.error('loadSyncConfig failed', e); }
+    }
+    function saveSyncConfig() {
+      try { localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify(syncConfig)); }
+      catch (e) { console.error('saveSyncConfig failed', e); }
+    }
+
+    async function pbAuth() {
+      const res = await fetch(`${syncConfig.url}/api/collections/users/auth-with-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identity: syncConfig.email, password: syncConfig.password }),
+      });
+      if (!res.ok) throw new Error('Auth failed: ' + res.status);
+      const data = await res.json();
+      pbCtx.token = data.token;
+      pbCtx.userId = data.record.id;
+    }
+
+    async function pbFetchState() {
+      const url = `${syncConfig.url}/api/collections/state/records?filter=(user='${pbCtx.userId}')&perPage=1`;
+      const res = await fetch(url, { headers: { 'Authorization': pbCtx.token } });
+      if (!res.ok) throw new Error('Fetch failed: ' + res.status);
+      const data = await res.json();
+      return data.items[0] || null;
+    }
+
+    async function pbSaveState() {
+      const body = JSON.stringify({ user: pbCtx.userId, data: state.progress });
+      const headers = { 'Content-Type': 'application/json', 'Authorization': pbCtx.token };
+      let res;
+      if (pbCtx.recordId) {
+        res = await fetch(`${syncConfig.url}/api/collections/state/records/${pbCtx.recordId}`, { method: 'PATCH', headers, body });
+      } else {
+        res = await fetch(`${syncConfig.url}/api/collections/state/records`, { method: 'POST', headers, body });
+      }
+      if (!res.ok) throw new Error('Save failed: ' + res.status);
+      const data = await res.json();
+      pbCtx.recordId = data.id;
+    }
+
+    async function syncPull() {
+      if (!syncConfig.enabled || !syncConfig.url) return;
+      try {
+        state.syncStatus = 'syncing'; updateSyncIndicator();
+        if (!pbCtx.token) await pbAuth();
+        const record = await pbFetchState();
+        if (record) {
+          pbCtx.recordId = record.id;
+          state.progress = record.data || {};
+          save();
+        }
+        state.syncStatus = 'synced'; updateSyncIndicator();
+        render();
+      } catch (e) {
+        console.error('syncPull failed', e);
+        state.syncStatus = 'error'; updateSyncIndicator();
+      }
+    }
+
+    async function syncPush() {
+      if (!syncConfig.enabled || !syncConfig.url) return;
+      try {
+        state.syncStatus = 'syncing'; updateSyncIndicator();
+        if (!pbCtx.token) await pbAuth();
+        if (!pbCtx.recordId) {
+          // Need to know if a record exists before deciding POST vs PATCH
+          const existing = await pbFetchState();
+          if (existing) pbCtx.recordId = existing.id;
+        }
+        await pbSaveState();
+        state.syncStatus = 'synced'; updateSyncIndicator();
+      } catch (e) {
+        console.error('syncPush failed', e);
+        state.syncStatus = 'error'; updateSyncIndicator();
+      }
+    }
+
+    function debouncedPush() {
+      if (!syncConfig.enabled) return;
+      if (pushTimer) clearTimeout(pushTimer);
+      pushTimer = setTimeout(() => syncPush(), 800);
+    }
+
+    function updateSyncIndicator() {
+      const el = document.getElementById('syncIndicator');
+      if (!el) return;
+      const map = {
+        offline: { color: '#5A554A', label: 'local' },
+        connecting: { color: '#8FA6B5', label: 'sync…' },
+        syncing: { color: '#8FA6B5', label: 'sync…' },
+        synced: { color: '#7A8B6F', label: 'synced' },
+        error: { color: '#D4775C', label: 'error' },
+      };
+      const s = map[state.syncStatus] || map.offline;
+      el.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:${s.color};display:inline-block;"></span><span style="color:${s.color};">${s.label}</span>`;
+    }
+
+    // Background poll for changes from other devices, every 45s
+    setInterval(() => {
+      if (syncConfig.enabled && state.syncStatus !== 'syncing') syncPull();
+    }, 45000);
+    // Pull on tab focus too
+    window.addEventListener('focus', () => {
+      if (syncConfig.enabled && state.syncStatus !== 'syncing') syncPull();
+    });
+
+    // ============================================================
+    // HELPERS
+    // ============================================================
+    function daysBetween(a, b) {
+      const A = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+      const B = new Date(b.getFullYear(), b.getMonth(), b.getDate());
+      return Math.floor((B - A) / 86400000);
+    }
+    function getCurrentWeek() {
+      const diff = daysBetween(START_DATE, new Date());
+      return Math.max(1, Math.min(20, Math.floor(diff / 7) + 1));
+    }
+    function getCurrentDayIdx() {
+      const diff = daysBetween(START_DATE, new Date());
+      return ((diff % 7) + 7) % 7;
+    }
+    function getWeekStart(weekNum) {
+      const d = new Date(START_DATE);
+      d.setDate(d.getDate() + (weekNum - 1) * 7);
+      return d;
+    }
+    function formatDate(d) { return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+    function dayLabel(offset) { return ['M', 'T', 'W', 'T', 'F', 'S', 'S'][offset]; }
+    function dayFullName(offset) { return ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][offset]; }
+
+    function computeStats() {
+      let total = 0, done = 0, projects = 0, sds = 0;
+      for (let w = 1; w <= 20; w++) {
+        for (let d = 0; d < 7; d++) {
+          total += 2;
+          if (state.progress[`w${w}_d${d}_a`]) done++;
+          if (state.progress[`w${w}_d${d}_b`]) done++;
+        }
+        if (state.progress[`w${w}_project`]) projects++;
+        if (state.progress[`w${w}_sd`]) sds++;
+      }
+      const today = new Date();
+      let streak = 0;
+      for (let back = 0; back < 140; back++) {
+        const d = new Date(today); d.setDate(today.getDate() - back);
+        const diff = daysBetween(START_DATE, d);
+        if (diff < 0) break;
+        const w = Math.floor(diff / 7) + 1;
+        const di = diff % 7;
+        if (w < 1 || w > 20) continue;
+        const a = state.progress[`w${w}_d${di}_a`];
+        const b = state.progress[`w${w}_d${di}_b`];
+        if (a || b) streak++; else break;
+      }
+      return { total, done, projects, sds, streak, pct: total ? Math.round(done / total * 100) : 0 };
+    }
+
+    function escapeHtml(str) {
+      if (str == null) return '';
+      return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    // ============================================================
+    // ACTIONS
+    // ============================================================
+    function toggleBlock(week, day, block) {
+      state.progress[`w${week}_d${day}_${block}`] = !state.progress[`w${week}_d${day}_${block}`];
+      save(); debouncedPush(); render();
+    }
+    function toggleProject(week) {
+      state.progress[`w${week}_project`] = !state.progress[`w${week}_project`];
+      save(); debouncedPush(); render();
+    }
+    function toggleSD(week) {
+      state.progress[`w${week}_sd`] = !state.progress[`w${week}_sd`];
+      save(); debouncedPush(); render();
+    }
+    function toggleBrief(id) {
+      if (state.expandedBriefs.has(id)) state.expandedBriefs.delete(id);
+      else state.expandedBriefs.add(id);
+      render();
+    }
+    function setTab(tab) {
+      state.activeTab = tab;
+      if (tab === 'week') state.selectedWeek = getCurrentWeek();
+      state.expandedBriefs.clear(); // collapse briefs on tab switch
+      render();
+    }
+    function selectWeek(w) {
+      state.selectedWeek = w;
+      state.activeTab = 'week';
+      state.expandedBriefs.clear();
+      render();
+    }
+    function resetAll() {
+      if (confirm('Reset ALL progress? This cannot be undone.')) {
+        state.progress = {}; save(); render();
+      }
+    }
+    function exportData() {
+      const blob = new Blob([JSON.stringify({ progress: state.progress, exportedAt: new Date().toISOString() }, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `runway-backup-${new Date().toISOString().split('T')[0]}.json`;
+      a.click(); URL.revokeObjectURL(url);
+    }
+
+    // ============================================================
+    // BRIEF RENDERING
+    // ============================================================
+    function renderBrief(briefId, brief, variant) {
+      // variant: 'a' (default amber), 'b' (sage), 'sd' (blue)
+      const open = state.expandedBriefs.has(briefId);
+      const variantClass = variant === 'b' ? 'b-brief' : (variant === 'sd' ? 'sd-brief' : '');
+      const terms = (brief.terms || []).map(t => `<span class="brief-term">${escapeHtml(t)}</span>`).join('');
+      const tests = (brief.test || []).map(t => `<li>${escapeHtml(t)}</li>`).join('');
+      const doneWhen = brief.doneWhen ? `<div class="brief-section"><div class="brief-label">Done When</div><div class="brief-done">${escapeHtml(brief.doneWhen)}</div></div>` : '';
+
+      return `
+        <button class="learn-toggle ${open ? 'open' : ''}" data-action="toggle-brief" data-brief="${briefId}">
+          <span class="arrow">›</span>
+          <span>${open ? 'Hide' : 'Learn'} the concept</span>
+        </button>
+        <div class="brief ${variantClass} ${open ? 'open' : ''}">
+          <div class="brief-section">
+            <div class="brief-label">Core Insight</div>
+            <div class="brief-text">${escapeHtml(brief.insight)}</div>
+          </div>
+          <div class="brief-section">
+            <div class="brief-label">Why This Matters</div>
+            <div class="brief-why">${escapeHtml(brief.why)}</div>
+          </div>
+          <div class="brief-section">
+            <div class="brief-label">Key Terms</div>
+            <div class="brief-terms">${terms}</div>
+          </div>
+          <div class="brief-section">
+            <div class="brief-label">Best Resource</div>
+            <div class="brief-resource">${escapeHtml(brief.resource)}</div>
+          </div>
+          <div class="brief-section">
+            <div class="brief-label">Self-Test</div>
+            <ul class="brief-tests">${tests}</ul>
+          </div>
+          ${doneWhen}
+        </div>
+      `;
+    }
+
+    // ============================================================
+    // RENDER VIEWS
+    // ============================================================
+    function render() {
+      const stats = computeStats();
+      document.getElementById('streakNum').textContent = stats.streak;
+      document.getElementById('streakPlural').textContent = stats.streak === 1 ? '' : 's';
+      document.querySelectorAll('.tab').forEach(el => el.classList.toggle('active', el.dataset.tab === state.activeTab));
+      const view = document.getElementById('view');
+      if (state.activeTab === 'now') view.innerHTML = renderNow();
+      else if (state.activeTab === 'week') view.innerHTML = renderWeek();
+      else if (state.activeTab === 'plan') view.innerHTML = renderPlan(stats);
+      attachHandlers();
+      renderSettingsModal();
+      updateSyncIndicator();
+    }
+
+    function renderNow() {
+      const now = new Date();
+      const curWeek = getCurrentWeek();
+      const curDay = getCurrentDayIdx();
+      const week = CURRICULUM[curWeek - 1];
+      if (!week) return `<div class="empty">No active week yet. Plan starts May 21, 2026.</div>`;
+      const aDone = !!state.progress[`w${curWeek}_d${curDay}_a`];
+      const bDone = !!state.progress[`w${curWeek}_d${curDay}_b`];
+      const projDone = !!state.progress[`w${curWeek}_project`];
+      const sdDone = !!state.progress[`w${curWeek}_sd`];
+
+      return `
+        <div class="now-hero">
+          <div class="now-date">${now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase()}</div>
+          <div class="now-day">${dayFullName(curDay)}.</div>
+          <div class="now-week-pill">W${String(curWeek).padStart(2,'0')} · ${escapeHtml(week.title)}</div>
+        </div>
+
+        <div class="big-block ${aDone ? 'done' : ''}">
+          <div class="row" data-action="toggle" data-week="${curWeek}" data-day="${curDay}" data-block="a" style="cursor:pointer;">
+            <span class="tag">BLOCK A · BUILD</span>
+            <span class="check-circle">${aDone ? '✓' : ''}</span>
+          </div>
+          <div class="desc" data-action="toggle" data-week="${curWeek}" data-day="${curDay}" data-block="a" style="cursor:pointer;">${escapeHtml(week.blockA.task)}</div>
+          <div class="duration" style="margin-top:8px;">45 min</div>
+          ${renderBrief(`now-a-${curWeek}`, week.blockA.brief, 'a')}
+        </div>
+
+        <div class="big-block b-block ${bDone ? 'done' : ''}">
+          <div class="row" data-action="toggle" data-week="${curWeek}" data-day="${curDay}" data-block="b" style="cursor:pointer;">
+            <span class="tag">BLOCK B · UNDERSTAND</span>
+            <span class="check-circle">${bDone ? '✓' : ''}</span>
+          </div>
+          <div class="desc" data-action="toggle" data-week="${curWeek}" data-day="${curDay}" data-block="b" style="cursor:pointer;">${escapeHtml(week.blockB.task)}</div>
+          <div class="duration" style="margin-top:8px;">30 min</div>
+          ${renderBrief(`now-b-${curWeek}`, week.blockB.brief, 'b')}
+        </div>
+
+        <div class="project-section">
+          <div class="project-label">Week ${curWeek} Project</div>
+          <button class="project-btn ${projDone ? 'done' : ''}" data-action="toggle-project" data-week="${curWeek}">
+            <span class="project-check">${projDone ? '✓' : '○'}</span>
+            <span>${escapeHtml(week.project)}</span>
+          </button>
+        </div>
+
+        <div class="sd-section">
+          <div class="sd-label">System Design · This Week</div>
+          <div class="sd-card ${sdDone ? 'done' : ''}">
+            <div class="sd-card-header" data-action="toggle-sd" data-week="${curWeek}">
+              <span class="sd-check">${sdDone ? '✓' : '○'}</span>
+              <div class="sd-body">
+                <div class="sd-topic">${escapeHtml(week.sd.topic)}</div>
+                <div class="sd-meta">${escapeHtml(week.sd.source)}</div>
+                <div class="sd-cadence">2–3 SESSIONS · ~30 MIN EACH</div>
+              </div>
+            </div>
+            ${renderBrief(`now-sd-${curWeek}`, week.sd.brief, 'sd')}
+          </div>
+        </div>
+
+        <div class="footnote" style="margin-top: 20px; padding: 0;">Either block counts toward your streak. The point is momentum.</div>
+      `;
+    }
+
+    function renderWeek() {
+      const w = state.selectedWeek;
+      const week = CURRICULUM[w - 1];
+      const weekStart = getWeekStart(w);
+      const curWeek = getCurrentWeek();
+      const curDay = getCurrentDayIdx();
+      const isNow = w === curWeek;
+
+      const dayCells = Array.from({length: 7}).map((_, d) => {
+        const dayDate = new Date(weekStart); dayDate.setDate(weekStart.getDate() + d);
+        const isToday = isNow && d === curDay;
+        const aDone = !!state.progress[`w${w}_d${d}_a`];
+        const bDone = !!state.progress[`w${w}_d${d}_b`];
+        return `
+          <div class="day-col ${isToday ? 'today' : ''}">
+            <div class="day-label">${dayLabel(d)}</div>
+            <div class="day-date">${dayDate.getDate()}</div>
+            <button class="check-btn ${aDone ? 'done-a' : ''}" data-action="toggle" data-week="${w}" data-day="${d}" data-block="a">${aDone ? '●' : 'A'}</button>
+            <button class="check-btn ${bDone ? 'done-b' : ''}" data-action="toggle" data-week="${w}" data-day="${d}" data-block="b">${bDone ? '●' : 'B'}</button>
+          </div>
+        `;
+      }).join('');
+
+      const projDone = !!state.progress[`w${w}_project`];
+      const sdDone = !!state.progress[`w${w}_sd`];
+      const prev = w > 1 ? `<button class="text-btn" data-action="select-week" data-week="${w-1}">← W${w-1}</button>` : '<span></span>';
+      const next = w < 20 ? `<button class="text-btn" data-action="select-week" data-week="${w+1}">W${w+1} →</button>` : '<span></span>';
+
+      return `
+        <div style="display:flex; justify-content: space-between; margin-bottom: 16px;">${prev}${next}</div>
+
+        <span class="phase-tag" style="background: ${PHASE_COLORS[week.phase]}">${week.phase}</span>
+        <div class="week-meta">
+          WEEK ${String(week.num).padStart(2,'0')} · ${formatDate(weekStart)} – ${formatDate(new Date(weekStart.getTime() + 6 * 86400000))}
+          ${isNow ? '<span class="now-badge">NOW</span>' : ''}
+        </div>
+        <div class="week-title">${escapeHtml(week.title)}</div>
+
+        <div class="block-section">
+          <div class="block-header">
+            <span class="block-tag">BLOCK A</span>
+            <span class="block-duration">Build · 45 min</span>
+          </div>
+          <div class="block-text">${escapeHtml(week.blockA.task)}</div>
+          ${renderBrief(`wk-a-${w}`, week.blockA.brief, 'a')}
+        </div>
+
+        <div class="block-section">
+          <div class="block-header">
+            <span class="block-tag b">BLOCK B</span>
+            <span class="block-duration">Understand · 30 min</span>
+          </div>
+          <div class="block-text">${escapeHtml(week.blockB.task)}</div>
+          ${renderBrief(`wk-b-${w}`, week.blockB.brief, 'b')}
+        </div>
+
+        <div class="day-grid">${dayCells}</div>
+
+        <div class="project-section">
+          <div class="project-label">Week ${w} Mini Project</div>
+          <button class="project-btn ${projDone ? 'done' : ''}" data-action="toggle-project" data-week="${w}">
+            <span class="project-check">${projDone ? '✓' : '○'}</span>
+            <span>${escapeHtml(week.project)}</span>
+          </button>
+        </div>
+
+        <div class="sd-section">
+          <div class="sd-label">System Design · Week ${w}</div>
+          <div class="sd-card ${sdDone ? 'done' : ''}">
+            <div class="sd-card-header" data-action="toggle-sd" data-week="${w}">
+              <span class="sd-check">${sdDone ? '✓' : '○'}</span>
+              <div class="sd-body">
+                <div class="sd-topic">${escapeHtml(week.sd.topic)}</div>
+                <div class="sd-meta">${escapeHtml(week.sd.source)}</div>
+                <div class="sd-cadence">2–3 SESSIONS · ~30 MIN EACH</div>
+              </div>
+            </div>
+            ${renderBrief(`wk-sd-${w}`, week.sd.brief, 'sd')}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderSettingsModal() {
+      const container = document.getElementById('modalContainer');
+      if (!state.showSettings) { container.innerHTML = ''; return; }
+      container.innerHTML = `
+        <div class="modal-backdrop" data-action="close-settings">
+          <div class="modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+              <div class="modal-title">Sync Settings</div>
+              <button class="modal-close" data-action="close-settings">close</button>
+            </div>
+
+            <div class="toggle-row">
+              <span class="toggle-label">Cloud sync</span>
+              <div class="toggle-switch ${syncConfig.enabled ? 'on' : ''}" data-action="toggle-sync">
+                <div class="toggle-knob"></div>
+              </div>
+            </div>
+
+            <div class="form-row" style="margin-top: 16px;">
+              <label class="form-label">PocketBase URL</label>
+              <input class="form-input" id="syncUrl" type="text" placeholder="http://100.x.x.x:8090" value="${escapeHtml(syncConfig.url)}" />
+              <div class="form-hint">Your PocketBase server. Use your Tailscale IP for access from anywhere.</div>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Email</label>
+              <input class="form-input" id="syncEmail" type="email" placeholder="you@example.com" value="${escapeHtml(syncConfig.email)}" />
+            </div>
+            <div class="form-row">
+              <label class="form-label">Password</label>
+              <input class="form-input" id="syncPassword" type="password" placeholder="••••••••" value="${escapeHtml(syncConfig.password)}" />
+              <div class="form-hint">Stored only in this browser's localStorage. Never sent anywhere except your PocketBase.</div>
+            </div>
+
+            <button class="btn-primary" data-action="save-sync">Save & Test Connection</button>
+
+            <div id="syncMsg"></div>
+
+            <div style="margin-top: 24px; padding-top: 20px; border-top: 1px solid #2A2722;">
+              <div class="form-label">Status</div>
+              <div style="font-size: 13px; color: #D4CFC2; line-height: 1.6;">
+                ${state.syncStatus === 'synced' ? '✓ Synced with PocketBase' : ''}
+                ${state.syncStatus === 'offline' ? 'Working offline — local only' : ''}
+                ${state.syncStatus === 'error' ? '⚠ Connection error — check URL and credentials' : ''}
+                ${state.syncStatus === 'syncing' ? '↻ Syncing...' : ''}
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+      // Wire up modal handlers
+      container.querySelectorAll('[data-action]').forEach(el => {
+        el.addEventListener('click', e => {
+          e.stopPropagation();
+          const action = el.dataset.action;
+          if (action === 'close-settings') closeSettings();
+          else if (action === 'toggle-sync') {
+            syncConfig.enabled = !syncConfig.enabled;
+            saveSyncConfig();
+            if (syncConfig.enabled) syncPull();
+            else { state.syncStatus = 'offline'; updateSyncIndicator(); }
+            renderSettingsModal();
+          }
+          else if (action === 'save-sync') saveSyncSettings();
+        });
+      });
+    }
+
+    function openSettings() { state.showSettings = true; renderSettingsModal(); }
+    function closeSettings() { state.showSettings = false; renderSettingsModal(); }
+
+    async function saveSyncSettings() {
+      const url = document.getElementById('syncUrl').value.trim().replace(/\/$/, '');
+      const email = document.getElementById('syncEmail').value.trim();
+      const password = document.getElementById('syncPassword').value;
+      syncConfig = { ...syncConfig, url, email, password };
+      saveSyncConfig();
+      pbCtx = { token: null, userId: null, recordId: null };
+
+      const msgEl = document.getElementById('syncMsg');
+      msgEl.innerHTML = '<div class="sync-msg">Testing...</div>';
+      try {
+        await pbAuth();
+        await syncPull();
+        msgEl.innerHTML = '<div class="sync-msg ok">✓ Connected. Initial sync complete.</div>';
+        // After successful first sync, push current local in case it has new data
+        await syncPush();
+      } catch (e) {
+        msgEl.innerHTML = `<div class="sync-msg err">✗ ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function renderPlan(stats) {
+      const curWeek = getCurrentWeek();
+      const rows = CURRICULUM.map(w => {
+        const milestone = MILESTONES[w.num];
+        const blocks = Array.from({length: 7}).reduce((s, _, d) => s + (state.progress[`w${w.num}_d${d}_a`] ? 1 : 0) + (state.progress[`w${w.num}_d${d}_b`] ? 1 : 0), 0);
+        const pct = Math.round(blocks / 14 * 100);
+        const cls = w.num === curWeek ? 'current' : (w.num < curWeek ? 'past' : '');
+        const projDone = state.progress[`w${w.num}_project`];
+        const sdDone = state.progress[`w${w.num}_sd`];
+        const badges = `<span style="display:inline-flex; gap:3px; margin-right:6px;">
+          <span style="width:5px;height:5px;border-radius:50%;background:${projDone ? '#7A8B6F' : '#2A2722'};display:inline-block;"></span>
+          <span style="width:5px;height:5px;border-radius:50%;background:${sdDone ? '#8FA6B5' : '#2A2722'};display:inline-block;"></span>
+        </span>`;
+        return `
+          ${milestone ? `<div class="milestone-row"><span class="milestone-label">◆ ${milestone.label}</span><span class="milestone-desc">${milestone.desc}</span></div>` : ''}
+          <button class="timeline-row ${cls}" data-action="select-week" data-week="${w.num}">
+            <span class="timeline-dot" style="background: ${PHASE_COLORS[w.phase]}"></span>
+            <span class="timeline-num">W${String(w.num).padStart(2,'0')}</span>
+            <span class="timeline-title">${escapeHtml(w.title)}</span>
+            <span class="timeline-pct">${badges}${pct > 0 ? pct + '%' : '·'}</span>
+          </button>
+        `;
+      }).join('');
+
+      return `
+        <div class="kicker">Overview</div>
+        <div class="stats" style="grid-template-columns: repeat(3, 1fr); gap: 10px;">
+          <div class="stat">
+            <div class="stat-label">Blocks</div>
+            <div class="stat-value">${stats.done}<span style="color:#8A8478; font-size:13px;">/${stats.total}</span></div>
+            <div class="stat-bar"><div class="stat-bar-fill" style="width:${stats.pct}%"></div></div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Projects</div>
+            <div class="stat-value">${stats.projects}<span style="color:#8A8478; font-size:13px;">/20</span></div>
+            <div class="stat-bar"><div class="stat-bar-fill" style="width:${Math.round(stats.projects/20*100)}%"></div></div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Sys Design</div>
+            <div class="stat-value">${stats.sds}<span style="color:#8A8478; font-size:13px;">/20</span></div>
+            <div class="stat-bar"><div class="stat-bar-fill" style="width:${Math.round(stats.sds/20*100)}%; background:#8FA6B5;"></div></div>
+          </div>
+        </div>
+
+        <div class="kicker" style="margin-top: 24px;">Timeline</div>
+        ${rows}
+
+        <div class="footer-actions">
+          <button class="text-btn" data-action="export">export backup</button>
+          <button class="text-btn" data-action="reset">reset all</button>
+        </div>
+      `;
+    }
+
+    // ============================================================
+    // EVENT HANDLERS
+    // ============================================================
+    function attachHandlers() {
+      document.querySelectorAll('[data-action]').forEach(el => {
+        el.addEventListener('click', e => {
+          e.stopPropagation();
+          const action = el.dataset.action;
+          if (action === 'toggle') toggleBlock(+el.dataset.week, +el.dataset.day, el.dataset.block);
+          else if (action === 'toggle-project') toggleProject(+el.dataset.week);
+          else if (action === 'toggle-sd') toggleSD(+el.dataset.week);
+          else if (action === 'toggle-brief') toggleBrief(el.dataset.brief);
+          else if (action === 'select-week') selectWeek(+el.dataset.week);
+          else if (action === 'reset') resetAll();
+          else if (action === 'export') exportData();
+          else if (action === 'open-settings') openSettings();
+        });
+      });
+    }
+    document.querySelectorAll('.tab').forEach(el => el.addEventListener('click', () => setTab(el.dataset.tab)));
+
+    load();
+    loadSyncConfig();
+    render();
+    updateSyncIndicator();
+    if (syncConfig.enabled) syncPull();
+  </script>
+</body>
+</html>
